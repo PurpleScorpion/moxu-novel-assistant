@@ -59,6 +59,13 @@ int main(int argc, char **argv)
                     oldDeepSeek.endpoint() == QUrl("https://api.deepseek.com/chat/completions"),
                 "旧版 DeepSeek 配置不兼容");
         Window window;
+        QSettings().setValue(
+            "aiSites/zai-messages",
+            QByteArray(
+                R"({"name":"Z.AI（ZCode 接口）","address":"https://api.z.ai/api/anthropic","models":["GLM-5.2","自选模型"],"protocol":"messages-bearer"})"));
+        QSettings().setValue(
+            "aiSites/zai",
+            QByteArray(R"({"name":"我的国际站","address":"https://api.z.ai/api/paas/v4","models":["glm-5.2"]})"));
         window.show();
         QTcpServer server;
         require(server.listen(QHostAddress::LocalHost), "无法开启本机模拟服务");
@@ -113,7 +120,11 @@ int main(int argc, char **argv)
         siteList->setCurrentItem(siteList->findItems("智谱 GLM（国内）", Qt::MatchExactly).first());
         address->setText(QString("http://127.0.0.1:%1/v1").arg(port));
         click(window, "保存配置");
-        siteList->setCurrentItem(siteList->findItems("Z.AI（ZCode 接口）", Qt::MatchExactly).first());
+        require(siteList->findItems("我的国际站", Qt::MatchExactly).size() == 1, "升级覆盖了自定义站点名");
+        auto renamed = siteList->findItems("智谱 GLM（ZCode 兼容）", Qt::MatchExactly);
+        require(renamed.size() == 1, "旧版预设站点未显示新名称");
+        siteList->setCurrentItem(renamed.first());
+        require(modelField->toPlainText().contains("自选模型"), "重命名丢失已保存的模型");
         require(protocol->currentData() == "messages-bearer" && address->text() == "https://api.z.ai/api/anthropic",
                 "ZCode 预设协议或地址错误");
         address->setText(QString("http://127.0.0.1:%1/api/anthropic").arg(port));

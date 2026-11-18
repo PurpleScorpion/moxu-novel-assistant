@@ -71,9 +71,9 @@ inline QList<AiSite> aiSites()
     QList<AiSite> sites{
         {"deepseek", "DeepSeek", "https://api.deepseek.com", {"deepseek-flash", "deepseek-v4-pro"}},
         {"glm", "智谱 GLM（国内）", "https://open.bigmodel.cn/api/paas/v4", {"glm-5.3", "glm-5.2", "glm-5-turbo"}},
-        {"zai", "Z.AI GLM（国际）", "https://api.z.ai/api/paas/v4", {"glm-5.2", "glm-5-turbo", "glm-5.3"}},
+        {"zai", "智谱 GLM（国际通用）", "https://api.z.ai/api/paas/v4", {"glm-5.2", "glm-5-turbo", "glm-5.3"}},
         {"zai-messages",
-         "Z.AI（ZCode 接口）",
+         "智谱 GLM（ZCode 兼容）",
          "https://api.z.ai/api/anthropic",
          {"GLM-5.2", "GLM-5-Turbo"},
          "messages-bearer"},
@@ -97,7 +97,12 @@ inline QList<AiSite> aiSites()
         if (it == sites.end())
             sites.append(site);
         else
+        {
+            if ((id == "zai" && site.name == "Z.AI GLM（国际）") ||
+                (id == "zai-messages" && site.name == "Z.AI（ZCode 接口）"))
+                site.name = it->name;
             *it = site;
+        }
     }
     return sites;
 }
@@ -314,7 +319,7 @@ class AiConfig : public QWidget
         protocol->setObjectName("siteProtocol");
         protocol->addItem("OpenAI 兼容（Chat Completions）", "chat");
         protocol->addItem("Anthropic Messages（API Key）", "messages");
-        protocol->addItem("Anthropic Messages（Bearer，ZCode 接口）", "messages-bearer");
+        protocol->addItem("Anthropic Messages（Bearer，ZCode 兼容）", "messages-bearer");
         form->addWidget(protocol);
         form->addWidget(new QLabel("接口基础地址"));
         form->addWidget(address);
