@@ -94,8 +94,7 @@ int main(int argc, char **argv)
         click(sheet(), "插入属性面板");
         check(editor->toPlainText() == "开头面板结尾", "选区插入错误");
         action("记录事件");
-        auto fields = visible<QLineEdit>(sheet());
-        auto *desc = fields.last();
+        auto *desc = sheet().findChild<QLineEdit *>("eventDescription");
         desc->setText("完成任务");
         const auto editorWidth = editor->width();
         window.findChild<QPushButton *>("collapseChapters")->click();
@@ -106,9 +105,17 @@ int main(int argc, char **argv)
         click(window, "展开目录");
         check(desc->isVisible() && desc->text() == "完成任务", "展开章节目录关闭了事件侧栏");
         click(sheet(), "新建资源");
-        sheet().findChild<QLineEdit *>("newResourceName")->setText("灵石");
-        click(sheet(), "创建");
-        auto *resource = visible<QComboBox>(sheet()).last();
+        check(!desc->isVisible(), "创建资源未进入独立页面");
+        click(window, "返回");
+        check(desc->isVisible() && desc->text() == "完成任务", "返回后事件草稿丢失");
+        click(sheet(), "新建资源");
+        auto *newResource = visible<QLineEdit>(window).first();
+        newResource->setText("积分");
+        click(window, "创建");
+        check(newResource->isVisible(), "重名时未停留在创建页");
+        newResource->setText("灵石");
+        click(window, "创建");
+        auto *resource = sheet().findChild<QComboBox *>("resourceChoice");
         check(!resource->isEditable() && resource->currentText() == "灵石", "新建资源后没有自动选中");
         resource->setCurrentIndex(resource->findText("积分"));
         auto *amount = visible<QSpinBox>(sheet()).first();
@@ -128,15 +135,15 @@ int main(int argc, char **argv)
               "事件及正文未一起保存");
         auto before = editor->toPlainText();
         action("记录事件");
-        visible<QLineEdit>(sheet()).last()->setText("购买丹药");
+        sheet().findChild<QLineEdit *>("eventDescription")->setText("购买丹药");
         visible<QSpinBox>(sheet()).first()->setValue(-60);
         visible<QCheckBox>(sheet()).first()->setChecked(false);
         click(sheet(), "保存事件");
         check(verify.balance(1, "积分", 1) == 240 && editor->toPlainText() == before, "仅记账改变了正文");
         action("记录事件");
-        resource = visible<QComboBox>(sheet()).last();
+        resource = sheet().findChild<QComboBox *>("resourceChoice");
         resource->setCurrentIndex(resource->findText("灵石"));
-        visible<QLineEdit>(sheet()).last()->setText("获得灵石");
+        sheet().findChild<QLineEdit *>("eventDescription")->setText("获得灵石");
         visible<QSpinBox>(sheet()).first()->setValue(12);
         visible<QCheckBox>(sheet()).first()->setChecked(false);
         click(sheet(), "保存事件");
@@ -186,6 +193,9 @@ int main(int argc, char **argv)
         check(ledger->isVisible() && ledger->rowCount() == 3 && ledger->item(0, 5)->text() == "获得灵石" &&
                   ledger->horizontalHeaderItem(4)->text() == "结余",
               "账本列顺序或默认排序错误");
+        for (int col = 0; col < 6; ++col)
+            check((ledger->item(0, col)->textAlignment() == Qt::AlignCenter) == (col >= 1 && col <= 4),
+                  "账本列对齐错误");
         window.findChild<QLineEdit *>("ledgerPerson")->setText("澈");
         window.findChild<QLineEdit *>("ledgerDescription")->setText("丹药");
         for (auto *combo : visible<QComboBox>(window))
@@ -289,6 +299,68 @@ int main(int argc, char **argv)
         auto selectedStart = titleStart();
         chapterList->setCurrentRow(0);
         check(selectedStart >= 0 && titleStart() == selectedStart, "目录选中前后的文字位置变动");
+        auto setMode = [&](QString label) {
+            sheet().findChild<QComboBox *>("eventKind")->setCurrentText(label);
+            visible<QCheckBox>(sheet()).first()->setChecked(false);
+        };
+        action("返回资料工作区");
+        window.findChild<QListWidget *>("navigation")->setCurrentRow(3);
+        click(window, "记录事件");
+        setMode("获得道具");
+        sheet().findChild<QLineEdit *>("eventSubject")->setText("盘古幡");
+        click(sheet(), "保存事件");
+        action("记录事件");
+        setMode("转赠道具");
+        check(sheet().findChild<QComboBox *>("eventKnown")->currentText() == "盘古幡", "道具无法转赠");
+        click(sheet(), "保存事件");
+        action("记录事件");
+        setMode("习得技能／功法");
+        sheet().findChild<QLineEdit *>("eventSubject")->setText("八九玄功");
+        visible<QSpinBox>(sheet()).first()->setValue(1);
+        click(sheet(), "保存事件");
+        action("记录事件");
+        setMode("施展技能／功法");
+        click(sheet(), "保存事件");
+        verify.event(2, 1, "灵石", 10, "第二章收入");
+        verify.run(
+            "INSERT INTO templates(title,pattern) VALUES('旅途','{{灵石}} / {{持有道具}} / {{八九玄功.剩余次数}}')");
+        action("属性面板");
+        options = visible<QComboBox>(sheet());
+        options.last()->setCurrentText("旅途");
+        check(preview()->toPlainText() == "12 / 无 / 0", "资源、技能状态或截章错误");
+        options.first()->setCurrentIndex(1);
+        check(preview()->toPlainText() == "31 / 盘古幡 / 未记录", "人物资产串用");
+        click(sheet(), "插入属性面板");
+        check(editor->toPlainText().contains("31 / 盘古幡 / 未记录"), "资产面板没有写入正文");
+        action("记录事件");
+        setMode("获得消耗品");
+        sheet().findChild<QComboBox *>("supplyName")->setEditText("回城卷轴");
+        click(sheet(), "保存事件");
+        action("记录事件");
+        setMode("使用消耗品");
+        check(sheet().findChild<QComboBox *>("supplyName")->currentText() == "回城卷轴", "消耗品库存未加载");
+        sheet().findChild<QSpinBox *>("supplyQuantity")->setValue(2);
+        click(sheet(), "保存事件");
+        check(sheet().findChild<QLabel *>("sheetMessage")->text().contains("数量不足"), "超量使用未提示");
+        sheet().findChild<QSpinBox *>("supplyQuantity")->setValue(1);
+        click(sheet(), "保存事件");
+        verify.run("INSERT INTO templates(title,pattern) VALUES('随身物品','{{回城卷轴.数量}} / {{消耗品}}')");
+        action("属性面板");
+        visible<QComboBox>(sheet()).last()->setCurrentText("随身物品");
+        check(preview()->toPlainText() == "0 / 无", "一次性卷轴用后仍出现在库存");
+        click(sheet(), "收起");
+        action("剧情大事");
+        window.findChild<QLineEdit *>("plotArcName")->setText("玄武门之变");
+        click(window, "保存节点");
+        auto *strand = window.findChild<QComboBox *>("plotStrand");
+        strand->setCurrentIndex(1);
+        window.findChild<QLineEdit *>("plotStrandName")->setText("宫门部署");
+        click(window, "保存节点");
+        check(strand->currentData().toString() == "宫门部署", "支线未保存或未选中");
+        click(window, "进入专注写作");
+        action("时间轴");
+        check(visible<QTextEdit>(sheet()).first()->toPlainText().contains("玄武门之变 · 宫门部署 · 开始"),
+              "时间轴缺少并行剧情");
         check(watch.shown.isEmpty(), "专注写作中出现了对话框");
     }
     catch (const std::exception &e)

@@ -1,6 +1,7 @@
 #pragma once
 #include "book_cover.h"
 #include "dossier.h"
+#include "event_form.h"
 #include "writer_sheet.h"
 #include "writing_assistant.h"
 #include <QtWidgets>
@@ -470,7 +471,7 @@ class Window : public QMainWindow
     {
         save();
         closeSheet();
-        dossier->enter(book.get(), page);
+        dossier->enter(book.get(), page, chapter);
         setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
         pages->setCurrentWidget(dossier);
         tools->hide();
@@ -500,84 +501,114 @@ class Window : public QMainWindow
         tools->hide();
         directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
     }
-    void record()
+    void openResourcePage(std::function<void(const QString &)> created)
     {
-        beginSheet("记录事件");
-        auto *people = personChoice();
-        auto *picker = new ResourcePicker(false);
-        sheet->form->addWidget(new QLabel("资源"));
-        sheet->form->addWidget(picker);
-        picker->load(*book);
-        auto *resource = picker->choices;
-        sheet->form->addWidget(new QLabel("变动数额（收入为正，支出为负）"));
-        auto *delta = new QSpinBox;
-        delta->setRange(-1000000000, 1000000000);
-        sheet->form->addWidget(delta);
-        auto *description = sheet->field("事件描述");
-        auto *insert = new QCheckBox("同时插入本章正文");
-        insert->setChecked(true);
-        sheet->form->addWidget(insert);
-        auto *preview = sheet->textArea("余额与正文预览", true);
-        preview->setMaximumHeight(110);
-        auto refresh = [=, this] {
-            guard([&] {
-                if (people->currentIndex() < 0 || resource->currentIndex() < 0)
-                {
-                    preview->clear();
-                    return;
-                }
-                QString unit = resource->currentData().toString();
-                sheet->report({});
-                auto balance = book->balance(people->currentData().toInt(), unit, chapter);
-                QString text = QString("%1：%2 → %3").arg(unit).arg(balance).arg(balance + delta->value());
-                if (insert->isChecked())
-                    text += "\n\n" + eventText(description->text().trimmed(), unit, delta->value(), balance);
-                preview->setPlainText(text);
-            });
+        auto *origin = pages->currentWidget();
+        auto *page = new QWidget;
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(32, 24, 32, 24);
+        auto *header = new QHBoxLayout;
+        layout->addLayout(header);
+        header->addWidget(sectionLabel("新建本书资源"), 1);
+        auto back = [this, origin, page] {
+            pages->setCurrentWidget(origin);
+            pages->removeWidget(page);
+            page->deleteLater();
+            tools->setVisible(origin == writer);
+            statusBar()->setVisible(origin == writer);
         };
-        connect(people, &QComboBox::currentIndexChanged, sheet, refresh);
-        connect(delta, &QSpinBox::valueChanged, sheet, refresh);
-        connect(resource, &QComboBox::currentIndexChanged, sheet, refresh);
-        connect(description, &QLineEdit::textChanged, sheet, refresh);
-        connect(insert, &QCheckBox::toggled, sheet, refresh);
-        refresh();
-        button(sheet->form, "保存事件", [=, this] {
-            if (picker->isCreating())
-                throw std::runtime_error("请先创建新资源，或取消后使用已选资源。");
-            const int id = people->currentData().toInt();
-            const auto unit = resource->currentData().toString(), desc = description->text().trimmed();
-            if (!id || unit.isEmpty() || desc.isEmpty())
-                throw std::runtime_error("请选择人物，并填写资源名和事件描述。");
-            save();
-            if (insert->isChecked())
+        button(header, "返回", back);
+        layout->addSpacing(16);
+        layout->addWidget(new QLabel("资源名称"));
+        auto *name = new QLineEdit;
+        name->setMaximumWidth(480);
+        name->setObjectName("newResourceName");
+        name->setPlaceholderText("例如：灵石、声望");
+        layout->addWidget(name);
+        auto *notice = new QLabel("创建后可用于记录收支，也可在人物属性模板中引用。");
+        notice->setTextFormat(Qt::PlainText);
+        notice->setWordWrap(true);
+        layout->addWidget(notice);
+        auto *create = new QPushButton("创建");
+        create->setObjectName("primary");
+        layout->addWidget(create, 0, Qt::AlignLeft);
+        layout->addStretch();
+        connect(create, &QPushButton::clicked, page, [=, this] {
+            const auto resource = name->text().trimmed();
+            try
             {
-                auto snippet = eventText(desc, unit, delta->value(), book->balance(id, unit, chapter));
-                auto body = editor->toPlainText();
+                book->createResource(resource);
+            }
+            catch (const std::exception &e)
+            {
+                notice->setText(QString::fromUtf8(e.what()));
+                return;
+            }
+            back();
+            created(resource);
+        });
+        connect(name, &QLineEdit::returnPressed, create, &QPushButton::click);
+        pages->addWidget(page);
+        pages->setCurrentWidget(page);
+        tools->hide();
+        statusBar()->hide();
+        name->setFocus();
+    }
+    void record(bool insertInText = true)
+    {
+        beginSheet("记录事件 · 第 " + QString::number(chapters->currentRow() + 1) + " 章");
+        auto *form = new EventForm(*book, chapter, [this](auto done) { openResourcePage(done); });
+        form->insert->setChecked(insertInText);
+        sheet->form->addWidget(form);
+        button(sheet->form, "保存事件", [this, form] {
+            save();
+            const auto snippet = form->snippet();
+            auto body = editor->toPlainText();
+            if (form->insert->isChecked())
                 body.replace(insertion.selectionStart(), insertion.selectionEnd() - insertion.selectionStart(),
                              snippet);
-                book->event(chapter, id, unit, delta->value(), desc, &body);
+            form->persist(form->insert->isChecked() ? &body : nullptr);
+            if (form->insert->isChecked())
+            {
                 insertion.insertText(snippet);
                 dirty = false;
             }
-            else
-                book->event(chapter, id, unit, delta->value(), desc);
-            status->setText(insert->isChecked() ? "事件和正文已保存" : "事件已保存");
+            status->setText(form->insert->isChecked() ? "事件和正文已保存" : "事件已保存");
             closeSheet();
         })->setObjectName("primary");
-    }
-    static QString eventText(const QString &description, const QString &unit, int delta, qint64 before)
-    {
-        return QString("%1（%2%3%4，剩余%5）")
-            .arg(description, unit, delta >= 0 ? "+" : "", QString::number(delta), QString::number(before + delta));
     }
     QString renderPanel(int id, int t)
     {
         auto pattern = book->value("SELECT pattern FROM templates WHERE id=?", {t}).toString();
         auto q = book->run("SELECT name,attributes FROM people WHERE id=?", {id});
         q.next();
-        QMap<QString, QString> fields{{"姓名", q.value(0).toString()},
-                                      {"属性", q.value(1).toString()},
-                                      {"积分", QString::number(book->balance(id, "积分", chapter))}};
+        const auto resourceValues = book->resourceBalances(id, chapter);
+        auto fields = resourceValues;
+        fields["姓名"] = q.value(0).toString();
+        fields["属性"] = q.value(1).toString();
+        auto items = book->ownedItems(id, chapter);
+        const auto inventory = book->supplyCounts(id, chapter);
+        QStringList supplies;
+        for (auto it = inventory.cbegin(); it != inventory.cend(); ++it)
+        {
+            fields[it.key() + ".数量"] = QString::number(it.value());
+            if (!fields.contains(it.key()))
+                fields[it.key()] = QString::number(it.value());
+            if (it.value() > 0)
+                supplies << it.key() + " × " + QString::number(it.value());
+        }
+        fields["消耗品"] = supplies.isEmpty() ? "无" : supplies.join("、");
+        items.append(supplies);
+        fields["持有道具"] = items.isEmpty() ? "无" : items.join("、");
+        QStringList learned;
+        for (const auto &skill : book->characterSkills(id, chapter))
+        {
+            learned << skill.name;
+            fields[skill.name + ".等级"] = skill.level.isEmpty() ? "未记录" : skill.level;
+            fields[skill.name + ".冷却"] = skill.cooldown.isEmpty() ? "未记录" : skill.cooldown;
+            fields[skill.name + ".剩余次数"] = skill.remaining < 0 ? "不限" : QString::number(skill.remaining);
+        }
+        fields["已学技能"] = learned.isEmpty() ? "无" : learned.join("、");
         for (auto line : q.value(1).toString().split('\n'))
         {
             int sep = line.indexOf(QRegularExpression("[:：]"));
@@ -591,7 +622,11 @@ class Window : public QMainWindow
         {
             auto m = matches.next();
             result += pattern.mid(start, m.capturedStart() - start);
-            result += fields.value(m.captured(1), "未记录");
+            const auto key = m.captured(1);
+            if (key.startsWith("资源:") && resourceValues.contains(key.mid(3)))
+                result += resourceValues.value(key.mid(3));
+            else
+                result += fields.value(key, "未记录");
             start = m.capturedEnd();
         }
         result += pattern.mid(start);
@@ -622,11 +657,11 @@ class Window : public QMainWindow
     }
     void timeline()
     {
-        auto q = book->run(
-            "WITH numbered AS (SELECT id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters) "
-            "SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
-            "person,resource ORDER BY chapter,e.id),c.id,c.seq FROM events e JOIN numbered c ON c.id=e.chapter "
-            "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
+        auto q = book->run("WITH numbered AS (SELECT id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters) "
+                           "SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
+                           "person,resource ORDER BY chapter,e.anchor,e.plot,e.id),c.id,c.seq FROM journal e JOIN "
+                           "numbered c ON c.id=e.chapter "
+                           "LEFT JOIN people p ON p.id=e.person ORDER BY chapter,e.anchor,e.plot,e.id");
         beginSheet("时间轴与收支明细");
         auto *view = new QTextEdit;
         view->setReadOnly(true);
@@ -641,6 +676,13 @@ class Window : public QMainWindow
                 lastChapter = q.value(6);
                 html += QString("<h3 style='color:#a3eeb1'>%1</h3>")
                             .arg(numberedChapter(q.value(7).toLongLong(), q.value(0).toString()).toHtmlEscaped());
+            }
+            if (q.value(3).toString().isEmpty())
+            {
+                html += QString("<p><b>%1</b>　%2</p>")
+                            .arg(q.value(1).toString().toHtmlEscaped(),
+                                 q.value(2).toString().toHtmlEscaped().replace('\n', "<br>"));
+                continue;
             }
             auto amount = q.value(4).toString();
             if (q.value(4).toLongLong() > 0)
@@ -791,7 +833,8 @@ class Window : public QMainWindow
     {
         beginSheet("新建输出模板");
         auto *name = sheet->field("模板名称");
-        auto *pattern = sheet->textArea("模板内容（可用 {{姓名}}、{{积分}} 或 {{自定义属性名}}）");
+        auto *pattern =
+            sheet->textArea("模板内容（如 {{姓名}}、{{灵石}}、{{持有道具}}、{{血瓶.数量}}、{{上清仙法.等级}}）");
         pattern->setPlainText("【{{姓名}}】\n{{属性}}");
         button(sheet->form, "保存模板", [=, this] {
             if (name->text().trimmed().isEmpty() || pattern->toPlainText().isEmpty())
@@ -1037,6 +1080,7 @@ class Window : public QMainWindow
         tool("属性面板", [this] { panel(); });
         tool("记录事件", [this] { record(); });
         tools->addSeparator();
+        tool("剧情大事", [this] { enterDossier(Dossier::plotIndex); });
         tool("时间轴", [this] { timeline(); });
         tool("关系图", [this] { graph(); });
         tool("历史版本", [this] { history(); });
@@ -1078,15 +1122,23 @@ class Window : public QMainWindow
                     saveNow();
             });
         });
+        auto focusWriter = [this] {
+            setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+            pages->setCurrentWidget(writer);
+            tools->show();
+            statusBar()->show();
+            editor->setFocus();
+        };
         dossier = new Dossier(
-            [this] {
-                setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
-                pages->setCurrentWidget(writer);
-                tools->show();
-                statusBar()->show();
-                editor->setFocus();
-            },
-            [this] { showShelf(); }, [this] { graph(); }, [this](QString n) { setWindowTitle(n + " · 墨序"); });
+            focusWriter, [this] { showShelf(); }, [this] { graph(); },
+            [this](QString n) { setWindowTitle(n + " · 墨序"); }, [this](auto done) { openResourcePage(done); },
+            [this, focusWriter] {
+                guard([&] {
+                    dossier->flush();
+                    focusWriter();
+                    record(false);
+                });
+            });
         pages->addWidget(dossier);
         showShelf();
         if (!QSettings().contains("booksDir"))

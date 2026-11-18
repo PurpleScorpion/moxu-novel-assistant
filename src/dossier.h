@@ -3,6 +3,7 @@
 #include "event_ledger.h"
 #include "history_settings.h"
 #include "interface.h"
+#include "plot_page.h"
 #include "note_editor.h"
 #include <functional>
 
@@ -21,7 +22,8 @@ class Dossier : public QWidget
     HistorySettings *historySettings = new HistorySettings;
     std::function<void(QString)> renameBook;
     bool loading = false;
-    EventLedger *ledger = new EventLedger;
+    EventLedger *ledger;
+    PlotPage *plots = new PlotPage;
     QComboBox *from = new QComboBox, *to = new QComboBox;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
@@ -136,7 +138,7 @@ class Dossier : public QWidget
             counts->setText(QString("%1 章     /     %2 位人物     /     %3 条事件")
                                 .arg(book->value("SELECT count(*) FROM chapters").toInt())
                                 .arg(book->value("SELECT count(*) FROM people").toInt())
-                                .arg(book->value("SELECT count(*) FROM events").toInt()));
+                                .arg(book->value("SELECT count(*) FROM journal").toInt()));
         }
         else if (page == 1)
             refreshList(selected);
@@ -162,14 +164,17 @@ class Dossier : public QWidget
         }
         else if (page == 3)
             ledger->load(*book);
+        else if (page == plotIndex)
+            plots->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
 
   public:
+    static constexpr int plotIndex = 7;
     Dossier(std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
-            std::function<void(QString)> rename)
-        : renameBook(std::move(rename))
+            std::function<void(QString)> rename, OpenResourcePage open = {}, std::function<void()> record = {})
+        : renameBook(std::move(rename)), ledger(new EventLedger(open, record))
     {
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(22, 16, 22, 16);
@@ -181,6 +186,7 @@ class Dossier : public QWidget
         navigation->addItems({"书籍概览", "人物档案", "人物关系", "事件账本"});
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
             navigation->addItem(scopeName(scope));
+        navigation->addItem("剧情大事");
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
@@ -322,6 +328,7 @@ class Dossier : public QWidget
             notePages.append(editor);
             section(scopeName(scope), false)->addWidget(editor, 1);
         }
+        section("剧情大事")->addWidget(plots, 1);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;
@@ -348,7 +355,7 @@ class Dossier : public QWidget
         notice->pending.stop();
         if (!book)
             return;
-        if (details->currentIndex() >= 4)
+        if (details->currentIndex() >= 4 && details->currentIndex() < plotIndex)
             notePages.at(details->currentIndex() - 4)->flush();
         if (details->currentIndex() == 1)
             flushPerson();
@@ -378,7 +385,7 @@ class Dossier : public QWidget
     void savePending()
     {
         const int page = details->currentIndex();
-        if (page >= 4)
+        if (page >= 4 && page < plotIndex)
             notePages.at(page - 4)->savePending();
         else if (notice->pending.isActive())
             safe([this] {
@@ -389,8 +396,10 @@ class Dossier : public QWidget
     void saveNow()
     {
         const int page = details->currentIndex();
-        if (page >= 4)
+        if (page >= 4 && page < plotIndex)
             notePages.at(page - 4)->saveNow();
+        else if (page == plotIndex)
+            plots->saveNow();
         else if (page == 2)
             saveRelation->click();
         else if (page == 0 || page == 1)
@@ -401,7 +410,7 @@ class Dossier : public QWidget
                 notice->confirm(page == 0 ? "书籍资料" : "人物资料");
             });
     }
-    void enter(Book *source, int page = 0)
+    void enter(Book *source, int page = 0, int preferredChapter = 0)
     {
         book = source;
         if (bookFile != source->filePath())
@@ -411,6 +420,9 @@ class Dossier : public QWidget
         QSignalBlocker block(navigation);
         navigation->setCurrentRow(page);
         details->setCurrentIndex(page);
-        refreshPage(page);
+        if (page == plotIndex)
+            plots->load(*book, preferredChapter);
+        else
+            refreshPage(page);
     }
 };

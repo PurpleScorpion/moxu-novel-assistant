@@ -121,6 +121,26 @@ Book::Book(const QString &path, const QString &newTitle)
         run("CREATE TABLE IF NOT EXISTS resources(name TEXT PRIMARY KEY NOT NULL)");
         run("CREATE INDEX IF NOT EXISTS event_resource ON events(resource)");
         run("CREATE INDEX IF NOT EXISTS event_order ON events(chapter,id)");
+        run("CREATE TABLE IF NOT EXISTS event_details(event_id INTEGER PRIMARY KEY REFERENCES events ON DELETE CASCADE,"
+            "kind TEXT NOT NULL CHECK(kind IN ('note','acquire','transfer','learn','advance','use')),name TEXT,"
+            "recipient INTEGER REFERENCES people,level TEXT,cooldown TEXT,uses INTEGER CHECK(uses>=0))");
+        run("CREATE INDEX IF NOT EXISTS event_detail_name ON event_details(name,kind)");
+        run("CREATE TABLE IF NOT EXISTS supplies(event_id INTEGER PRIMARY KEY REFERENCES events ON DELETE CASCADE,"
+            "name TEXT NOT NULL,change INTEGER NOT NULL CHECK(change<>0),recipient INTEGER REFERENCES people)");
+        run("CREATE INDEX IF NOT EXISTS supply_name ON supplies(name,event_id)");
+        run("CREATE VIEW IF NOT EXISTS supply_flows AS SELECT s.name,e.id,e.chapter,e.person,s.change "
+            "FROM supplies s JOIN events e ON e.id=s.event_id UNION ALL "
+            "SELECT s.name,e.id,e.chapter,s.recipient,-s.change FROM supplies s JOIN events e ON e.id=s.event_id "
+            "WHERE s.recipient IS NOT NULL");
+        run("CREATE TABLE IF NOT EXISTS plot_steps(id INTEGER PRIMARY KEY,arc TEXT NOT NULL,strand TEXT NOT NULL,"
+            "chapter INTEGER NOT NULL REFERENCES chapters,phase TEXT NOT NULL CHECK(phase IN ('开始','进展','结束')),"
+            "note TEXT NOT NULL,anchor INTEGER NOT NULL)");
+        run("CREATE INDEX IF NOT EXISTS plot_history ON plot_steps(arc,chapter,id)");
+        // The anchor orders a plot entry immediately after the latest existing character event.
+        run("CREATE VIEW IF NOT EXISTS journal AS SELECT id,chapter,person,resource,delta,description,id AS anchor,"
+            "0 AS plot FROM events UNION ALL SELECT id,chapter,NULL,'',0,arc || ' · ' || "
+            "CASE WHEN strand='' THEN '主线' ELSE strand END || ' · ' || phase || "
+            "CASE WHEN note='' THEN '' ELSE '：' || note END,anchor,1 FROM plot_steps");
         run("CREATE TABLE IF NOT EXISTS history_settings(id INTEGER PRIMARY KEY CHECK(id=1),"
             "per_chapter INTEGER NOT NULL CHECK(per_chapter>=0),per_book INTEGER NOT NULL CHECK(per_book>=0))");
     }
@@ -257,12 +277,25 @@ qint64 Book::balance(int person, const QString &resource, int chapter) const
 }
 QStringList Book::resourceNames() const
 {
-    auto q = run("SELECT name FROM (SELECT name FROM resources UNION SELECT resource FROM events UNION SELECT '积分') "
+    auto q = run("SELECT name FROM (SELECT name FROM resources UNION SELECT resource FROM events WHERE resource<>'' "
+                 "UNION SELECT '积分') "
                  "ORDER BY name!='积分',name");
     QStringList names;
     while (q.next())
         names.append(q.value(0).toString());
     return names;
+}
+QMap<QString, QString> Book::resourceBalances(int person, int chapter) const
+{
+    QMap<QString, QString> balances;
+    for (const auto &name : resourceNames())
+        balances.insert(name, "0");
+    auto rows =
+        run("SELECT resource,sum(delta) FROM events WHERE person=? AND chapter<=? AND resource<>'' GROUP BY resource",
+            {person, chapter});
+    while (rows.next())
+        balances.insert(rows.value(0).toString(), rows.value(1).toString());
+    return balances;
 }
 void Book::createResource(const QString &name)
 {
@@ -280,12 +313,15 @@ void Book::createResource(const QString &name)
 }
 LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
 {
-    QString from = " FROM events e JOIN people p ON p.id=e.person WHERE 1";
+    QString from =
+        " FROM journal e LEFT JOIN people p ON p.id=e.person LEFT JOIN event_details d ON e.plot=0 AND d.event_id=e.id "
+        "LEFT JOIN supplies s ON e.plot=0 AND s.event_id=e.id LEFT JOIN people target ON "
+        "target.id=coalesce(d.recipient,s.recipient) WHERE 1";
     QVariantList args;
     if (!filter.person.isEmpty())
     {
-        from += " AND instr(lower(p.name),lower(?))>0";
-        args << filter.person;
+        from += " AND (instr(lower(p.name),lower(?))>0 OR instr(lower(target.name),lower(?))>0)";
+        args << filter.person << filter.person;
     }
     if (!filter.resource.isEmpty())
     {
@@ -294,24 +330,32 @@ LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
     }
     if (!filter.description.isEmpty())
     {
-        from += " AND instr(lower(e.description),lower(?))>0";
-        args << filter.description;
+        from += " AND (instr(lower(e.description),lower(?))>0 OR instr(lower(coalesce(d.name,s.name)),lower(?))>0)";
+        args << filter.description << filter.description;
     }
     LedgerPage result;
     result.total = value("SELECT count(*)" + from, args).toLongLong();
     result.pages = result.total ? 1 + (result.total - 1) / LedgerPage::pageSize : 1;
     result.number = qBound(qint64(1), page, result.pages);
-    const QString order = filter.newestFirst ? " ORDER BY chapter DESC,id DESC" : " ORDER BY chapter,id";
+    const QString order = filter.newestFirst ? " ORDER BY e.chapter DESC,e.anchor DESC,e.plot DESC,e.id DESC"
+                                             : " ORDER BY e.chapter,e.anchor,e.plot,e.id";
     args << LedgerPage::pageSize << (result.number - 1) * LedgerPage::pageSize;
     // Page the matches first. Each returned balance includes all earlier events in its account.
     auto rows =
-        run("WITH matches AS (SELECT e.*,p.name" + from + order +
+        run("WITH matches AS (SELECT e.*,coalesce(p.name,'—') || coalesce(' → ' || target.name,'') AS actor,"
+            "CASE WHEN e.plot=1 THEN 'plot' WHEN s.event_id IS NOT NULL THEN 'supply' ELSE d.kind END AS kind,"
+            "coalesce(d.name,s.name) AS subject,s.change AS quantity" +
+                from + order +
                 " LIMIT ? OFFSET ?),"
                 " numbered AS (SELECT id AS chapter_id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters)"
-                " SELECT seq,title,m.name,m.resource,m.delta,"
-                "(SELECT sum(a.delta) FROM events a WHERE a.person=m.person AND a.resource=m.resource "
-                " AND (a.chapter,a.id)<=(m.chapter,m.id)),m.description FROM matches m "
-                "JOIN numbered c ON c.chapter_id=m.chapter" +
+                " SELECT seq,title,e.actor,CASE WHEN e.kind IS NULL THEN e.resource ELSE coalesce(e.subject,'—') END,"
+                "CASE WHEN e.kind IS NULL THEN e.delta WHEN e.kind='supply' THEN e.quantity ELSE '—' END,"
+                "CASE WHEN e.kind IS NULL THEN (SELECT sum(a.delta) FROM events a WHERE a.person=e.person AND "
+                "a.resource=e.resource "
+                " AND (a.chapter,a.id)<=(e.chapter,e.id)) WHEN e.kind='supply' THEN "
+                "(SELECT sum(f.change) FROM supply_flows f WHERE f.person=e.person AND f.name=e.subject "
+                "AND (f.chapter,f.id)<=(e.chapter,e.id)) ELSE '—' END,e.description FROM matches e "
+                "JOIN numbered c ON c.chapter_id=e.chapter" +
                 order,
             args);
     while (rows.next())
@@ -322,6 +366,49 @@ LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
         result.rows << row;
     }
     return result;
+}
+
+void Book::plotStep(const QString &arc, const QString &strand, int chapter, const QString &phase, const QString &note)
+{
+    const auto title = arc.trimmed(), line = strand.trimmed();
+    if (title.isEmpty())
+        fail("请填写大事名称。");
+    if (line == "主线")
+        fail("「主线」是大事本身，请换一个支线名称。");
+    if (phase == "进展" && note.trimmed().isEmpty())
+        fail("请填写本次进展。");
+    atomic([&] {
+        run("INSERT INTO plot_steps(arc,strand,chapter,phase,note,anchor) "
+            "VALUES(?,?,?,?,?,(SELECT coalesce(max(id),0) FROM events))",
+            {title, line.isEmpty() ? QStringLiteral("") : line, chapter, phase,
+             note.trimmed().isEmpty() ? QStringLiteral("") : note.trimmed()});
+        auto rows = run("SELECT strand,phase FROM plot_steps WHERE arc=? ORDER BY chapter,id", {title});
+        QSet<QString> started, active;
+        while (rows.next())
+        {
+            const auto which = rows.value(0).toString(), step = rows.value(1).toString();
+            if (!which.isEmpty() && !active.contains(QString()))
+                fail("支线的所有节点都应在大事开始和结束之间。");
+            if (step == "开始")
+            {
+                if (started.contains(which))
+                    fail("该大事或支线已有开始记录，请选择已有条目记录进展。");
+                started.insert(which);
+                active.insert(which);
+            }
+            else
+            {
+                if (!active.contains(which))
+                    fail("该章节不在这条剧情线的开始与结束之间。");
+                if (step == "结束")
+                {
+                    if (which.isEmpty() && active.size() > 1)
+                        fail("请先收束仍在进行的支线，再结束整件大事。");
+                    active.remove(which);
+                }
+            }
+        }
+    });
 }
 void Book::event(int chapter, int person, const QString &resource, int delta, const QString &description,
                  const QString *body)
@@ -334,6 +421,188 @@ void Book::event(int chapter, int person, const QString &resource, int delta, co
                   {person, resource})
                 .toLongLong() < 0)
             fail("此次变化会使本章或后续章节余额不足。");
+        if (body)
+            save(chapter, *body);
+    });
+}
+
+QStringList Book::ownedItems(int person, int chapter) const
+{
+    auto rows = run("SELECT name FROM (SELECT d.name,coalesce(d.recipient,e.person) AS owner,"
+                    "row_number() OVER(PARTITION BY d.name ORDER BY e.chapter DESC,e.id DESC) AS latest "
+                    "FROM event_details d JOIN events e ON e.id=d.event_id "
+                    "WHERE d.kind IN ('acquire','transfer') AND e.chapter<=?) WHERE latest=1 AND owner=? ORDER BY name",
+                    {chapter, person});
+    QStringList items;
+    while (rows.next())
+        items << rows.value(0).toString();
+    return items;
+}
+
+namespace
+{
+qint64 insertStoryRow(Book &book, int chapter, int person, const QString &description)
+{
+    if (description.trimmed().isEmpty())
+        fail("请填写事件描述。");
+    return book
+        .run("INSERT INTO events(chapter,person,resource,delta,description) VALUES(?,?,'',0,?)",
+             {chapter, person, description})
+        .lastInsertId()
+        .toLongLong();
+}
+} // namespace
+
+void Book::storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
+                      const QString &description, const QString *body)
+{
+    const QString name = item.trimmed();
+    atomic([&] {
+        if (kind != StoryKind::Note && name.isEmpty())
+            fail("请选择或填写道具名称。");
+        if (kind == StoryKind::Transfer && (!recipient || recipient == person))
+            fail("请选择另一位人物作为接收人。");
+        const auto id = insertStoryRow(*this, chapter, person, description);
+        const QString type = kind == StoryKind::Note ? "note" : kind == StoryKind::Acquire ? "acquire" : "transfer";
+        run("INSERT INTO event_details(event_id,kind,name,recipient) VALUES(?,?,?,?)",
+            {id, type, kind == StoryKind::Note ? QVariant() : QVariant(name),
+             kind == StoryKind::Transfer ? QVariant(recipient) : QVariant()});
+        if (kind != StoryKind::Note)
+        {
+            auto history =
+                run("SELECT d.kind,e.person,d.recipient FROM event_details d JOIN events e ON e.id=d.event_id "
+                    "WHERE d.name=? AND d.kind IN ('acquire','transfer') ORDER BY e.chapter,e.id",
+                    {name});
+            int owner = 0;
+            while (history.next())
+            {
+                const int actor = history.value(1).toInt();
+                if (history.value(0).toString() == "acquire")
+                {
+                    if (owner)
+                        fail("本书已记录这件道具的获得。易主请使用「转赠道具」。");
+                    owner = actor;
+                }
+                else
+                {
+                    if (owner != actor)
+                        fail("此次记录与本章或后续章节的道具归属冲突。");
+                    owner = history.value(2).toInt();
+                }
+            }
+        }
+        if (body)
+            save(chapter, *body);
+    });
+}
+
+QMap<QString, qint64> Book::supplyCounts(int person, int chapter) const
+{
+    auto rows = run("WITH stock AS (SELECT name,sum(change) AS amount FROM supply_flows "
+                    "WHERE person=? AND chapter<=? GROUP BY name) "
+                    "SELECT names.name,coalesce(stock.amount,0) FROM (SELECT DISTINCT name FROM supplies) names "
+                    "LEFT JOIN stock ON stock.name=names.name ORDER BY names.name",
+                    {person, chapter});
+    QMap<QString, qint64> counts;
+    while (rows.next())
+        counts.insert(rows.value(0).toString(), rows.value(1).toLongLong());
+    return counts;
+}
+
+void Book::supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
+                       const QString &description, const QString *body)
+{
+    const auto item = name.trimmed();
+    if (item.isEmpty() || amount <= 0)
+        fail("请选择或填写消耗品名称，并填写正整数数量。");
+    if (action == SupplyAction::Give && (!recipient || recipient == person))
+        fail("请选择另一位人物作为接收人。");
+    atomic([&] {
+        const auto id = insertStoryRow(*this, chapter, person, description);
+        run("INSERT INTO supplies(event_id,name,change,recipient) VALUES(?,?,?,?)",
+            {id, item, action == SupplyAction::Receive ? amount : -amount,
+             action == SupplyAction::Give ? QVariant(recipient) : QVariant()});
+        if (action != SupplyAction::Receive && value("SELECT min(total) FROM (SELECT sum(change) OVER(ORDER BY "
+                                                     "chapter,id ROWS UNBOUNDED PRECEDING) AS total "
+                                                     "FROM supply_flows WHERE name=? AND person=?)",
+                                                     {item, person})
+                                                       .toLongLong() < 0)
+            fail("消耗品数量不足，无法完成本次操作。请核对本章和后续章节的库存。");
+        if (body)
+            save(chapter, *body);
+    });
+}
+
+namespace
+{
+QList<CharacterSkill> readSkills(const Book &book, int person, int chapter, const QString &only = {})
+{
+    QString sql =
+        "SELECT d.name,d.kind,d.level,d.cooldown,d.uses FROM event_details d JOIN events e ON e.id=d.event_id "
+        "WHERE d.kind IN ('learn','advance','use') AND e.person=?";
+    QVariantList args{person};
+    if (chapter > 0)
+    {
+        sql += " AND e.chapter<=?";
+        args << chapter;
+    }
+    if (!only.isEmpty())
+    {
+        sql += " AND d.name=?";
+        args << only;
+    }
+    auto rows = book.run(sql + " ORDER BY e.chapter,e.id", args);
+    QMap<QString, CharacterSkill> skills;
+    while (rows.next())
+    {
+        const QString name = rows.value(0).toString(), type = rows.value(1).toString();
+        if (type == "learn")
+        {
+            if (skills.contains(name))
+                fail("该人物已有同名技能或功法的习得记录。");
+            skills.insert(name, {name, rows.value(2).toString(), rows.value(3).toString(),
+                                 rows.value(4).isNull() ? -1 : rows.value(4).toInt()});
+            continue;
+        }
+        if (!skills.contains(name))
+            fail("该人物在此章尚未习得这项技能或功法。");
+        auto &skill = skills[name];
+        if (type == "advance")
+        {
+            skill.level = rows.value(2).toString();
+            skill.cooldown = rows.value(3).toString();
+        }
+        else if (skill.remaining == 0)
+            fail("该技能的可用次数不足，请核对本章及后续章节的施展记录。");
+        else if (skill.remaining > 0)
+            --skill.remaining;
+    }
+    return skills.values();
+}
+} // namespace
+
+QList<CharacterSkill> Book::characterSkills(int person, int chapter) const
+{
+    return readSkills(*this, person, chapter);
+}
+
+void Book::skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
+                      const QString &description, const QString *body)
+{
+    const auto name = skill.name.trimmed();
+    if (name.isEmpty())
+        fail("请选择或填写技能／功法名称。");
+    if (action == SkillAction::Learn && (skill.remaining == 0 || skill.remaining < -1))
+        fail("可用次数请选择不限或至少一次。");
+    atomic([&] {
+        const auto id = insertStoryRow(*this, chapter, person, description);
+        const QString type = action == SkillAction::Learn     ? "learn"
+                             : action == SkillAction::Advance ? "advance"
+                                                              : "use";
+        run("INSERT INTO event_details(event_id,kind,name,level,cooldown,uses) VALUES(?,?,?,?,?,?)",
+            {id, type, name, skill.level, skill.cooldown,
+             action == SkillAction::Learn && skill.remaining >= 0 ? QVariant(skill.remaining) : QVariant()});
+        readSkills(*this, person, 0, name); // Backdated uses must leave later chapters valid.
         if (body)
             save(chapter, *body);
     });

@@ -162,6 +162,71 @@ int main(int argc, char **argv)
         query.description = "%";
         if (other.ledgerPage(query, 1).total != 0)
             return 23;
+        auto rejected = [](auto attempt) {
+            try
+            {
+                attempt();
+            }
+            catch (const std::runtime_error &)
+            {
+                return true;
+            }
+            return false;
+        };
+        if (other.resourceBalances(1, 1).value("旧灵石") != "65" || other.resourceBalances(2, 1).value("声望") != "0")
+            return 24;
+        other.storyEvent(1, 1, StoryKind::Acquire, "太极图", 0, "得宝");
+        other.storyEvent(3, 1, StoryKind::Transfer, "太极图", 2, "山门赠宝");
+        QString wrong = "错误正文";
+        const auto oldBody = other.value("SELECT body FROM chapters WHERE id=2");
+        if (!rejected([&] { other.storyEvent(2, 1, StoryKind::Transfer, "太极图", 2, "冲突", &wrong); }) ||
+            other.ownedItems(1, 2) != QStringList{"太极图"} || reopened.ownedItems(2, 3) != QStringList{"太极图"} ||
+            !other.ownedItems(1, 3).isEmpty() || other.value("SELECT body FROM chapters WHERE id=2") != oldBody)
+            return 25;
+        auto gifts = other.ledgerPage({"苏", "", "太极图"}, 1);
+        if (gifts.total != 1 ||
+            gifts.rows.first().mid(1) != QStringList{"林澈 → 苏禾", "太极图", "—", "—", "山门赠宝"} ||
+            other.resourceNames().contains(QStringLiteral("")))
+            return 26;
+        CharacterSkill art{"一气化三清", "入门", "三日", 1};
+        other.skillEvent(1, 1, SkillAction::Learn, art, "习得神通");
+        art.level = "大成";
+        other.skillEvent(2, 1, SkillAction::Advance, art, "突破");
+        other.skillEvent(3, 1, SkillAction::Use, art, "施展神通");
+        if (other.characterSkills(1, 1).first().level != "入门" || other.characterSkills(1, 2).first().remaining != 1 ||
+            reopened.characterSkills(1, 3).first().remaining != 0 ||
+            !rejected([&] { other.skillEvent(2, 1, SkillAction::Use, art, "提前施展", &wrong); }) ||
+            !rejected([&] { other.skillEvent(1, 2, SkillAction::Use, art, "尚未习得"); }))
+            return 27;
+        art.remaining = -1;
+        other.skillEvent(2, 2, SkillAction::Learn, art, "传功");
+        for (int i = 0; i < 4; ++i)
+            other.skillEvent(2, 2, SkillAction::Use, art, "切磋");
+        if (other.characterSkills(2, 2).first().remaining != -1 || !other.characterSkills(2, 1).isEmpty())
+            return 28;
+        other.storyEvent(1, 1, StoryKind::Note, {}, 0, "拜入山门");
+        other.plotStep("玄武门之变", {}, 1, "开始", {});
+        other.plotStep("玄武门之变", "宫门部署", 1, "开始", "调兵");
+        other.plotStep("玄武门之变", "朝堂反应", 1, "开始", "入朝");
+        other.plotStep("玄武门之变", "宫门部署", 2, "结束", "宫门已定");
+        if (!rejected([&] { other.plotStep("玄武门之变", {}, 2, "结束", {}); }))
+            return 29;
+        other.plotStep("玄武门之变", "朝堂反应", 3, "结束", "宣诏");
+        other.plotStep("玄武门之变", {}, 3, "结束", "尘埃落定");
+        if (!rejected([&] { other.plotStep("玄武门之变", "宫门部署", 3, "进展", "越界"); }) ||
+            reopened.ledgerPage({"", "", "玄武门之变"}, 1).total != 6)
+            return 30;
+        other.supplyEvent(1, 1, SupplyAction::Receive, "血瓶", 5, 0, "购药");
+        other.supplyEvent(2, 1, SupplyAction::Consume, "血瓶", 2, 0, "疗伤");
+        other.supplyEvent(3, 1, SupplyAction::Give, "血瓶", 1, 2, "赠药");
+        other.supplyEvent(3, 2, SupplyAction::Consume, "血瓶", 1, 0, "服药");
+        if (other.supplyCounts(1, 1).value("血瓶") != 5 || reopened.supplyCounts(1, 3).value("血瓶") != 2 ||
+            other.supplyCounts(2, 3).value("血瓶") != 0 ||
+            !rejected([&] { other.supplyEvent(2, 1, SupplyAction::Consume, "血瓶", 3, 0, "提前透支", &wrong); }) ||
+            other.ledgerPage({"苏", "", "赠药"}, 1).rows.first().mid(1, 4) !=
+                QStringList{"林澈 → 苏禾", "血瓶", "-1", "2"} ||
+            other.ledgerPage({"苏", "", "服药"}, 1).rows.first().at(4) != "0")
+            return 31;
     }
     catch (const std::exception &e)
     {

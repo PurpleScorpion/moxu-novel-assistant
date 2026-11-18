@@ -6,7 +6,7 @@ class EventLedger : public QWidget
     Book *book = nullptr;
     QString bookFile;
     QLineEdit *person = new QLineEdit, *description = new QLineEdit;
-    ResourcePicker *resources = new ResourcePicker(true);
+    ResourcePicker *resources;
     QComboBox *sort = new QComboBox;
     QTableWidget *table = new QTableWidget;
     QLabel *summary = new QLabel;
@@ -27,8 +27,8 @@ class EventLedger : public QWidget
                     const auto &text = result.rows[r][c];
                     auto *item = new QTableWidgetItem(text);
                     item->setToolTip(Qt::convertFromPlainText(text));
-                    if (c == 3 || c == 4)
-                        item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                    if (c >= 1 && c <= 4)
+                        item->setTextAlignment(Qt::AlignCenter);
                     table->setItem(r, c, item);
                 }
             table->scrollToTop();
@@ -56,7 +56,7 @@ class EventLedger : public QWidget
     }
 
   public:
-    EventLedger()
+    EventLedger(OpenResourcePage open, std::function<void()> record) : resources(new ResourcePicker(true, open))
     {
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -99,6 +99,12 @@ class EventLedger : public QWidget
         layout->addLayout(pages);
         summary->setTextFormat(Qt::PlainText);
         pages->addWidget(summary, 1);
+        if (record)
+        {
+            auto *add = new QPushButton("记录事件");
+            pages->addWidget(add);
+            connect(add, &QPushButton::clicked, this, record);
+        }
         pages->addWidget(previous);
         pages->addWidget(next);
         connect(find, &QPushButton::clicked, this, &EventLedger::search);

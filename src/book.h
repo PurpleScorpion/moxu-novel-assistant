@@ -23,6 +23,31 @@ struct LedgerFilter
     bool newestFirst = true;
 };
 
+enum class StoryKind
+{
+    Note,
+    Acquire,
+    Transfer
+};
+
+enum class SkillAction
+{
+    Learn,
+    Advance,
+    Use
+};
+enum class SupplyAction
+{
+    Receive,
+    Consume,
+    Give
+};
+struct CharacterSkill
+{
+    QString name, level, cooldown;
+    int remaining = -1; // -1 means unlimited.
+};
+
 struct LedgerPage
 {
     static constexpr int pageSize = 30;
@@ -71,7 +96,18 @@ class Book
     void event(int chapter, int person, const QString &resource, int delta, const QString &description,
                const QString *body = nullptr);
     qint64 balance(int person, const QString &resource, int chapter) const;
+    QMap<QString, QString> resourceBalances(int person, int chapter) const;
+    QStringList ownedItems(int person, int chapter) const;
+    QMap<QString, qint64> supplyCounts(int person, int chapter) const;
+    void supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
+                     const QString &description, const QString *body = nullptr);
+    void storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
+                    const QString &description, const QString *body = nullptr);
+    QList<CharacterSkill> characterSkills(int person, int chapter) const;
+    void skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
+                    const QString &description, const QString *body = nullptr);
     QStringList resourceNames() const;
     void createResource(const QString &name);
     LedgerPage ledgerPage(const LedgerFilter &filter, qint64 page) const;
+    void plotStep(const QString &arc, const QString &strand, int chapter, const QString &phase, const QString &note);
 };
