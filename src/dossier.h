@@ -1,5 +1,6 @@
 #pragma once
 #include "book.h"
+#include "history_settings.h"
 #include "interface.h"
 #include "note_editor.h"
 #include <functional>
@@ -16,6 +17,7 @@ class Dossier : public QWidget
     QString savedTitle, savedSynopsis, savedGenre, bookFile;
     SaveStatus *notice = new SaveStatus;
     QLabel *counts = new QLabel;
+    HistorySettings *historySettings = new HistorySettings;
     std::function<void(QString)> renameBook;
     bool loading = false;
     QTableWidget *ledger = new QTableWidget;
@@ -121,6 +123,7 @@ class Dossier : public QWidget
         QScopedValueRollback guard(loading, true);
         if (page == 0)
         {
+            historySettings->load(book);
             savedTitle = book->value("SELECT title FROM meta").toString();
             title->setText(savedTitle);
             auto info = book->run("SELECT genre,synopsis FROM book_profile WHERE id=1");
@@ -216,6 +219,7 @@ class Dossier : public QWidget
         auto *overview = section("书籍概览");
         overview->addWidget(new MatrixBanner("基础资料"));
         overview->addWidget(counts);
+        overview->addWidget(historySettings);
         overview->addWidget(new QLabel("书名"));
         overview->addWidget(title);
         overview->addWidget(new QLabel("题材"));

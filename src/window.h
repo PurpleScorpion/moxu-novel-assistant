@@ -717,9 +717,10 @@ class Window : public QMainWindow
         versions->setMaximumHeight(155);
         versions->setWordWrap(true);
         versions->setTextElideMode(Qt::ElideNone);
+        const auto limits = book->historyLimits();
         auto *summary = new QLabel(QString("每章最多 %1 份，全书共用 %2 份、%3 MiB 历史正文额度。优先保留近期版本。")
-                                       .arg(Book::chapterHistoryLimit)
-                                       .arg(Book::bookHistoryLimit)
+                                       .arg(limits.perChapter)
+                                       .arg(limits.perBook)
                                        .arg(Book::historyBudgetMiB));
         summary->setWordWrap(true);
         sheet->form->addWidget(summary);

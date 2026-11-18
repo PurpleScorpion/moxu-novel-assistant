@@ -348,10 +348,6 @@ class WritingAssistant : public QWidget
             QLabel#mutedLabel { color:#9bb6a7; }
             QFrame#railRule { background:#304638; }
             QTreeWidget { background:transparent; border:none; padding:0; }
-            QTreeWidget#writingSources::indicator { width:15px; height:15px; }
-            QTreeWidget#writingSources::indicator:unchecked {
-                border:1px solid #9ebfa9; border-radius:3px; background:#14281d;
-            }
             QTabWidget::pane { background:#12231b; border:1px solid #324b3c; border-radius:5px; }
             QTabBar::tab { background:transparent; color:#a2b7aa; border-bottom:2px solid transparent; padding:9px 16px; }
             QTabBar::tab:selected { color:#d5f9dd; background:#183223; border-bottom-color:#92ddaa; }

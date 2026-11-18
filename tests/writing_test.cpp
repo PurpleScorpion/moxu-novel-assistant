@@ -165,6 +165,10 @@ int main(int argc, char **argv)
             nav->setCurrentRow(page);
             require(body->toPlainText() == original + "！", "切回页面丢失修改");
             body->setPlainText(original);
+            window.activateWindow();
+            body->setFocus();
+            require(QTest::qWaitFor([&] { return body->hasFocus() && window.isActiveWindow(); }, 3000),
+                    "快捷键测试未获得编辑器焦点");
             QTest::keyClick(body, Qt::Key_S, Qt::ControlModifier);
             require(stored() == original, "资料快捷保存失败");
             auto feedback = [&] {

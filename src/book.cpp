@@ -118,6 +118,8 @@ Book::Book(const QString &path, const QString &newTitle)
                     run("ALTER TABLE revisions ADD COLUMN rolling INTEGER NOT NULL DEFAULT 0");
             });
         run("CREATE INDEX IF NOT EXISTS revision_history ON revisions(rolling,chapter,id)");
+        run("CREATE TABLE IF NOT EXISTS history_settings(id INTEGER PRIMARY KEY CHECK(id=1),"
+            "per_chapter INTEGER NOT NULL CHECK(per_chapter>=0),per_book INTEGER NOT NULL CHECK(per_book>=0))");
     }
     catch (...)
     {
@@ -135,8 +137,26 @@ Book::~Book()
     db = {};
     QSqlDatabase::removeDatabase(connection);
 }
-QList<qint64> Book::historiesToKeep(bool includeLegacy) const
+HistoryLimits Book::historyLimits() const
 {
+    auto q = run("SELECT per_chapter,per_book FROM history_settings WHERE id=1");
+    if (q.next())
+        return {q.value(0).toInt(), q.value(1).toInt()};
+    return {};
+}
+HistoryUsage Book::historyUsage() const
+{
+    auto q =
+        run("SELECT count(*),coalesce(sum(octet_length(body)),0),count(*) FILTER (WHERE rolling=0) FROM revisions");
+    q.next();
+    return {q.value(0).toLongLong(), q.value(1).toLongLong(), q.value(2).toLongLong()};
+}
+QList<qint64> Book::historiesToKeep(bool includeLegacy, HistoryLimits limits) const
+{
+    if (limits.perChapter < 0 || limits.perBook < 0)
+        fail("历史份数不能小于零。");
+    if (!limits.perBook || !limits.perChapter)
+        return {};
     // SQLite can read octet_length of a stored column without loading its text.
     QString sql = "SELECT id,chapter,octet_length(body) FROM revisions";
     if (!includeLegacy)
@@ -145,11 +165,11 @@ QList<qint64> Book::historiesToKeep(bool includeLegacy) const
     QList<qint64> keep;
     QHash<int, int> chapterCounts;
     qint64 remaining = historyBudget;
-    while (keep.size() < bookHistoryLimit && rows.next())
+    while (keep.size() < limits.perBook && rows.next())
     {
         const int chapter = rows.value(1).toInt();
         const auto bytes = rows.value(2).toLongLong();
-        if (chapterCounts.value(chapter) >= chapterHistoryLimit || bytes > remaining)
+        if (chapterCounts.value(chapter) >= limits.perChapter || bytes > remaining)
             continue;
         keep.append(rows.value(0).toLongLong());
         ++chapterCounts[chapter];
@@ -169,12 +189,30 @@ void Book::trimHistory(bool includeLegacy, const QList<qint64> &keep)
 }
 qint64 Book::historyCleanupCount() const
 {
-    return value("SELECT count(*) FROM revisions").toLongLong() - historiesToKeep(true).size();
+    return value("SELECT count(*) FROM revisions").toLongLong() - historiesToKeep(true, historyLimits()).size();
+}
+qint64 Book::historyRemovalCount(HistoryLimits limits) const
+{
+    return value("SELECT count(*) FROM revisions WHERE rolling=1").toLongLong() - historiesToKeep(false, limits).size();
+}
+void Book::setHistoryLimits(HistoryLimits limits, qint64 expectedRemoval)
+{
+    atomic([&] {
+        const auto keep = historiesToKeep(false, limits);
+        const auto remove = value("SELECT count(*) FROM revisions WHERE rolling=1").toLongLong() - keep.size();
+        if (remove != expectedRemoval)
+            fail("历史版本已变化，请重新查看将移除的份数。");
+        run("INSERT INTO history_settings(id,per_chapter,per_book) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "per_chapter=excluded.per_chapter,per_book=excluded.per_book",
+            {limits.perChapter, limits.perBook});
+        if (remove)
+            trimHistory(false, keep);
+    });
 }
 void Book::includeLegacyInHistoryLimit(qint64 expectedRemoval)
 {
     atomic([&] {
-        const auto keep = historiesToKeep(true);
+        const auto keep = historiesToKeep(true, historyLimits());
         if (value("SELECT count(*) FROM revisions").toLongLong() - keep.size() != expectedRemoval)
             fail("历史版本已变化，请返回后重新预览。");
         trimHistory(true, keep);
@@ -196,11 +234,15 @@ void Book::save(int chapter, const QString &body, SaveMode mode)
                                   .toBool());
     if (checkpoint)
     {
-        auto inserted = run("INSERT INTO revisions(chapter,body,rolling) SELECT id,body,1 FROM chapters "
-                            "WHERE id=? AND octet_length(body)<=?",
-                            {chapter, historyBudget});
-        if (inserted.numRowsAffected())
-            trimHistory(false, historiesToKeep(false));
+        const auto limits = historyLimits();
+        if (limits.perChapter && limits.perBook)
+        {
+            auto inserted = run("INSERT INTO revisions(chapter,body,rolling) SELECT id,body,1 FROM chapters "
+                                "WHERE id=? AND octet_length(body)<=?",
+                                {chapter, historyBudget});
+            if (inserted.numRowsAffected())
+                trimHistory(false, historiesToKeep(false, limits));
+        }
     }
     run("UPDATE chapters SET body=? WHERE id=?", {body, chapter});
 }

@@ -7,6 +7,44 @@ class MoxuStyle : public QProxyStyle
     MoxuStyle() : QProxyStyle(QStyleFactory::create("Fusion"))
     {
     }
+    int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override
+    {
+        if (metric == PM_IndicatorWidth || metric == PM_IndicatorHeight)
+            return 18;
+        return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option, QPainter *painter,
+                       const QWidget *widget = nullptr) const override
+    {
+        if (element != PE_IndicatorCheckBox && element != PE_IndicatorItemViewItemCheck)
+        {
+            QProxyStyle::drawPrimitive(element, option, painter, widget);
+            return;
+        }
+        const bool enabled = option->state.testFlag(State_Enabled);
+        const bool marked = option->state & (State_On | State_NoChange);
+        const QColor edge = !enabled                                             ? QColor("#779084")
+                            : option->state & (State_MouseOver | State_HasFocus) ? QColor("#e1ffea")
+                                                                                 : QColor("#b1d3be");
+        const QColor fill = marked ? (enabled ? QColor("#9ee5af") : QColor("#91a499")) : QColor("#14251d");
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        const qreal side = qMin(option->rect.width(), option->rect.height());
+        painter->translate(QRectF(option->rect).center() - QPointF(side / 2, side / 2));
+        painter->scale(side / 18, side / 18);
+        painter->setPen(QPen(edge, 1.6));
+        painter->setBrush(fill);
+        painter->drawRoundedRect(QRectF(1, 1, 16, 16), 3, 3);
+        if (marked)
+        {
+            painter->setPen(QPen(QColor("#102219"), 2.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            if (option->state.testFlag(State_NoChange))
+                painter->drawLine(QPointF(5, 9), QPointF(13, 9));
+            else
+                painter->drawPolyline(QPolygonF{QPointF(4.5, 9), QPointF(7.6, 12.1), QPointF(13.6, 5.8)});
+        }
+        painter->restore();
+    }
     int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget,
                   QStyleHintReturn *result) const override
     {

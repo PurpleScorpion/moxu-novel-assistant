@@ -141,10 +141,30 @@ int main(int argc, char **argv)
         check(verify.value("SELECT count(*) FROM revisions WHERE rolling=0").toInt() == 14, "取消整理丢失旧历史");
         click(sheet(), "整理全书旧版历史…");
         click(sheet(), "确认整理");
-        check(verify.value("SELECT count(*) FROM revisions").toInt() == Book::chapterHistoryLimit &&
+        check(verify.value("SELECT count(*) FROM revisions").toInt() == HistoryLimits{}.perChapter &&
                   verify.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&
                   sheet().findChild<QLabel *>("sheetMessage")->text().contains(QString::number(toRemove)),
               "整理后数量或正文有误");
+        action("返回资料工作区");
+        auto *usage = window.findChild<QLabel *>("historyUsage");
+        check(usage->isVisible() && usage->text().contains("共 10 份"), "书籍概览的历史统计错误");
+        click(window, "设置历史上限");
+        auto *chapterLimit = window.findChild<QSpinBox *>("chapterHistoryLimit");
+        chapterLimit->setValue(2);
+        click(window, "取消");
+        check(verify.historyUsage().count == 10, "取消变更删掉了历史");
+        click(window, "设置历史上限");
+        check(chapterLimit->value() == 10, "取消后仍显示草稿");
+        chapterLimit->setValue(2);
+        window.findChild<QSpinBox *>("bookHistoryLimit")->setValue(7);
+        click(window, "应用并移除 8 份");
+        check(usage->text().contains("共 2 份") && verify.historyLimits().perBook == 7, "未应用本书上限或未刷新用量");
+        click(window, "进入专注写作");
+        action("历史版本");
+        bool currentLimits = false;
+        for (auto *label : visible<QLabel>(sheet()))
+            currentLimits |= label->text().contains("每章最多 2 份，全书共用 7 份");
+        check(currentLimits, "历史侧栏未显示本书设置");
         action("时间轴");
         check(preview()->toPlainText().contains("240"), "时间轴错误");
         action("关系图");
