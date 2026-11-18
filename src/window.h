@@ -21,6 +21,7 @@ class Window : public QMainWindow
     QListWidget *chapters = new QListWidget;
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
+    QLabel *chapterPosition = new QLabel;
     QLabel *status = new QLabel;
     QHBoxLayout *writerColumns;
     WriterSheet *sheet = nullptr;
@@ -150,14 +151,39 @@ class Window : public QMainWindow
         chapter = id;
         QSignalBlocker noEdit(editor);
         heading->setText(q.value(0).toString());
+        chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow() + 1).arg(chapters->count()));
         editor->setPlainText(q.value(1).toString());
         dirty = false;
         status->setText("已保存");
     }
     void addChapterItem(int id, const QString &name)
     {
-        auto *item = new QListWidgetItem(name, chapters);
+        auto *item = new QListWidgetItem(chapters);
+        setChapterLabel(item, name);
         item->setData(Qt::UserRole, id);
+    }
+    void setChapterLabel(QListWidgetItem *item, const QString &name)
+    {
+        item->setText(QString("%1  ·  %2").arg(chapters->row(item) + 1, 2, 10, QChar('0')).arg(name));
+        item->setToolTip(name);
+    }
+    void renameChapter()
+    {
+        save();
+        beginSheet("修改章节名");
+        auto *name = sheet->field("章节名", heading->text());
+        name->selectAll();
+        name->setFocus();
+        button(sheet->form, "保存章节名", [this, name] {
+            const auto title = name->text().trimmed();
+            if (title.isEmpty())
+                throw std::runtime_error("请填写章节名。");
+            book->run("UPDATE chapters SET title=? WHERE id=?", {title, chapter});
+            setChapterLabel(chapters->currentItem(), title);
+            heading->setText(title);
+            closeSheet();
+            status->setText("章节名已保存");
+        });
     }
     void showShelf()
     {
@@ -617,6 +643,19 @@ class Window : public QMainWindow
         button(actions, "新建书籍", [this] { newBook(); });
         button(actions, "打开书籍…", [this] { browseBooks(); });
         button(actions, "设置保存目录", [this] { chooseStorage(); });
+        button(actions, "AI 配置", [this] {
+            auto *page = new AiConfig(sessionKeys, QSettings().value("writing/provider", "deepseek").toString(),
+                                      [this](const QString &selected) {
+                                          if (!selected.isEmpty())
+                                              QSettings().setValue("writing/provider", selected);
+                                          auto *old = pages->currentWidget();
+                                          pages->setCurrentWidget(shelf);
+                                          pages->removeWidget(old);
+                                          old->deleteLater();
+                                      });
+            pages->addWidget(page);
+            pages->setCurrentWidget(page);
+        });
         connect(recent, &QListWidget::itemActivated, this, [this](auto *i) { guard([&] { openBook(i->text()); }); });
         pages->addWidget(storage);
         auto *storageHome = new QWidget;
@@ -676,7 +715,14 @@ class Window : public QMainWindow
         });
         auto *right = new QVBoxLayout;
         cols->addLayout(right, 4);
-        right->addWidget(heading);
+        auto *chapterHeader = new QHBoxLayout;
+        right->addLayout(chapterHeader);
+        heading->setTextFormat(Qt::PlainText);
+        heading->setWordWrap(true);
+        chapterHeader->addWidget(heading, 1);
+        chapterHeader->addWidget(chapterPosition);
+        button(chapterHeader, "改章名", [this] { renameChapter(); });
+        connect(chapters, &QListWidget::itemDoubleClicked, this, [this] { guard([this] { renameChapter(); }); });
         right->addWidget(editor);
         heading->setObjectName("title");
         editor->setObjectName("manuscript");

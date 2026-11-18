@@ -1,5 +1,5 @@
-#include "window.h"
 #include "dialog_watch.h"
+#include "window.h"
 #include <QTest>
 
 namespace
@@ -172,6 +172,34 @@ int main(int argc, char **argv)
         action("人物名字");
         click(sheet(), "插入姓名");
         check(editor->toPlainText() == "林澈", "新章节人物名插入失败");
+        click(window, "改章名");
+        auto *newName = visible<QLineEdit>(sheet()).first();
+        newName->clear();
+        click(sheet(), "保存章节名");
+        check(newName->isVisible(), "空名校验未保留编辑表单");
+        newName->setText("重逢");
+        click(sheet(), "保存章节名");
+        check(verify.value("SELECT title FROM chapters WHERE id=2").toString() == "重逢" &&
+                  verify.value("SELECT body FROM chapters WHERE id=2").toString() == "林澈",
+              "改名未保留原章节");
+        auto *chapterList = visible<QListWidget>(window).first();
+        check(chapterList->item(1)->text() == "02  ·  重逢", "目录没有显示序号及新章名");
+        auto titleStart = [&] {
+            QApplication::processEvents();
+            const auto bounds = chapterList->visualItemRect(chapterList->item(1));
+            auto image = chapterList->viewport()->grab(bounds).toImage();
+            for (int x = 2; x < image.width() - 2; ++x)
+                for (int y = image.height() / 4; y < 3 * image.height() / 4; ++y)
+                {
+                    auto pixel = image.pixelColor(x, y);
+                    if (pixel.red() > 135 && pixel.green() > 165)
+                        return x;
+                }
+            return -1;
+        };
+        auto selectedStart = titleStart();
+        chapterList->setCurrentRow(0);
+        check(selectedStart >= 0 && titleStart() == selectedStart, "目录选中前后的文字位置变动");
         check(watch.shown.isEmpty(), "专注写作中出现了对话框");
     }
     catch (const std::exception &e)

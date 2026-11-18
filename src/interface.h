@@ -1,9 +1,24 @@
 #pragma once
 #include <QtWidgets>
 
+class MoxuStyle : public QProxyStyle
+{
+  public:
+    MoxuStyle() : QProxyStyle(QStyleFactory::create("Fusion"))
+    {
+    }
+    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget,
+                  QStyleHintReturn *result) const override
+    {
+        if (hint == SH_ComboBox_Popup && widget && widget->objectName() == "aiService")
+            return 0;
+        return QProxyStyle::styleHint(hint, option, widget, result);
+    }
+};
+
 inline void applyTheme(QApplication &app)
 {
-    app.setStyle("Fusion");
+    app.setStyle(new MoxuStyle);
     QPalette palette;
     palette.setColor(QPalette::Window, QColor("#09120f"));
     palette.setColor(QPalette::WindowText, QColor("#d9eae0"));
@@ -28,7 +43,7 @@ inline void applyTheme(QApplication &app)
     QPushButton#primary {background:#a3eeb1;color:#102417;border-color:#a3eeb1;font-weight:600;}
     QPushButton:disabled,QPushButton#primary:disabled {background:#122019;color:#778d7e;border-color:#2a3d31;}
     QListWidget,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QTableWidget {background:#101f19;border:1px solid #345140;border-radius:4px;padding:6px;}
-    QListWidget::item {padding:8px;}
+    QListWidget::item {background:transparent;border:1px solid transparent;margin:0;padding:7px;}
     QListWidget::item:selected {background:#254834;color:#bcffca;}
     QListWidget#navigation {border:none;background:transparent;padding:0;}
     QToolBar {spacing:3px;background:#0e1c15;padding:5px;border-bottom:1px solid #294536;}
@@ -37,7 +52,8 @@ inline void applyTheme(QApplication &app)
     QMenu::item {padding:7px 18px;} QMenu::item:selected {background:#284f36;}
     QHeaderView::section {background:#193324;color:#c7e9ce;padding:8px;border:none;}
     QTreeWidget {background:#101f19;border:1px solid #345140;padding:6px;}
-    QTreeWidget::item {padding:5px;}
+    QTreeWidget::item {background:transparent;border:1px solid transparent;margin:0;padding:4px;}
+    QTreeWidget::item:selected {background:#254834;color:#bcffca;}
     QTabWidget::pane {border:1px solid #345140;}
     QTabBar::tab {background:#13271f;color:#b3c9bc;padding:8px 15px;}
     QTabBar::tab:selected {background:#244634;color:#c5f9ce;}
@@ -77,7 +93,6 @@ class MatrixBanner : public QWidget
                    p.fontMetrics().elidedText(title, Qt::ElideRight, textRect.width()));
     }
 };
-
 
 inline QString defaultBooksPath()
 {
