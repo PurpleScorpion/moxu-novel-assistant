@@ -1,4 +1,5 @@
 #pragma once
+#include "book_cover.h"
 #include "dossier.h"
 #include "writer_sheet.h"
 #include "writing_assistant.h"
@@ -18,6 +19,7 @@ class Window : public QMainWindow
     QWidget *writer = new QWidget, *storage = new QWidget;
     QLabel *location = new QLabel, *directoryMessage = new QLabel;
     QListWidget *recent = new QListWidget;
+    QLabel *shelfHeading = new QLabel;
     QListWidget *chapters = new QListWidget;
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
@@ -199,14 +201,107 @@ class Window : public QMainWindow
         status->clear();
         setWindowTitle("墨序 · 小说辅助系统");
         location->setText(QDir::toNativeSeparators(QSettings().value("booksDir", defaultBooksPath()).toString()));
+        refreshCovers();
+    }
+    static QString shelfTitle(const QString &path)
+    {
+        if (!QFileInfo(path).isFile())
+            return {};
+        const auto connection = QUuid::createUuid().toString();
+        QString title;
+        {
+            auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+            db.setDatabaseName(path);
+            db.setConnectOptions("QSQLITE_OPEN_READONLY");
+            if (db.open())
+            {
+                QSqlQuery q(db);
+                if (q.exec("SELECT title FROM meta WHERE format=1 LIMIT 1") && q.next())
+                    title = q.value(0).toString();
+            }
+        }
+        QSqlDatabase::removeDatabase(connection);
+        return title;
+    }
+    void deleteFromShelf(const QString &path, const QString &title)
+    {
+        auto *form = shelfActions->begin("删除书籍");
+        auto *details =
+            new QLabel("《" + title + "》将从书架移除，本地书籍文件将移入回收站。\n" + QDir::toNativeSeparators(path));
+        details->setTextFormat(Qt::PlainText);
+        details->setWordWrap(true);
+        form->addWidget(details);
+        form->addWidget(new QLabel("请输入完整书名以确认删除"));
+        auto *input = new QLineEdit;
+        input->setObjectName("deleteBookTitle");
+        form->addWidget(input);
+        form->addStretch();
+        auto *confirm = shelfActions->buttons("删除书籍", [this, path, title, input] {
+            if (input->text() != title)
+                throw std::runtime_error("输入的书名不匹配。");
+            QLockFile deleting(path + ".lock");
+            deleting.setStaleLockTime(0);
+            if (!deleting.tryLock())
+                throw std::runtime_error("书籍正在使用或目录无法写入，请关闭书籍后重试。");
+            if (shelfTitle(path) != title)
+                throw std::runtime_error("书籍已更名或文件已变动，请返回书架重新选择。");
+            if (QFileInfo::exists(path + "-journal") || QFileInfo(path + "-wal").size() > 0)
+                throw std::runtime_error("书籍还有待处理的数据库日志，请先打开并正常关闭后再删除。");
+            QSettings settings;
+            auto paths = settings.value("recent").toStringList();
+            paths.removeIf([&](const QString &entry) { return QFileInfo(entry) == QFileInfo(path); });
+            if (!QFile::moveToTrash(path))
+                throw std::runtime_error("无法将文件移入回收站，请检查文件是否被占用或所在磁盘是否支持回收站。");
+            settings.setValue("recent", paths);
+            refreshCovers();
+        });
+        confirm->setEnabled(false);
+        connect(input, &QLineEdit::textChanged, confirm,
+                [confirm, title](const QString &text) { confirm->setEnabled(text == title); });
+        input->setFocus();
+    }
+    void refreshCovers()
+    {
         recent->clear();
-        for (const auto &path : QSettings().value("recent").toStringList())
-            recent->addItem(path);
+        QSettings settings;
+        QStringList paths = settings.value("recent").toStringList();
+        QDir folder(settings.value("booksDir", defaultBooksPath()).toString());
+        for (const auto &file : folder.entryInfoList({"*.moxu"}, QDir::Files, QDir::Name))
+            paths.append(file.absoluteFilePath());
+        QSet<QString> seen;
+        for (const auto &entry : paths)
+        {
+            auto path = QFileInfo(entry).canonicalFilePath();
+            if (path.isEmpty() || seen.contains(path))
+                continue;
+            seen.insert(path);
+            const auto title = shelfTitle(path);
+            if (title.isEmpty())
+                continue;
+            auto *item = new QListWidgetItem(title, recent);
+            item->setData(Qt::UserRole, path);
+            item->setSizeHint(QSize(161, 209));
+            auto *cover = new BookCover(title, path);
+            recent->setItemWidget(item, cover);
+            connect(cover, &QPushButton::clicked, this, [this, path] { guard([&] { openBook(path); }); });
+            auto *menu = cover->actionsMenu();
+            menu->addAction("打开本地目录", this, [this, path] {
+                guard([&] {
+                    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath())))
+                        throw std::runtime_error("无法打开书籍所在目录。");
+                });
+            });
+            menu->addAction("删除书籍", this, [this, path, title] { deleteFromShelf(path, title); });
+        }
+        shelfHeading->setText(recent->count() ? QString("我的书籍 · %1 本").arg(recent->count())
+                                              : "书架暂无书籍，可以新建或打开一本书。");
     }
     void openBook(QString path, const QString &title = {})
     {
         if (path.isEmpty())
             return;
+        if (QFileInfo(path).exists())
+            path = QFileInfo(path).canonicalFilePath();
         auto candidate = std::make_unique<QLockFile>(path + ".lock");
         candidate->setStaleLockTime(0);
         if (!candidate->tryLock())
@@ -231,7 +326,7 @@ class Window : public QMainWindow
         auto paths = settings.value("recent").toStringList();
         paths.removeAll(path);
         paths.prepend(path);
-        settings.setValue("recent", paths.mid(0, 15));
+        settings.setValue("recent", paths);
     }
     void newBook()
     {
@@ -627,19 +722,17 @@ class Window : public QMainWindow
         setCentralWidget(pages);
         pages->addWidget(shelf);
         auto *intro = new QVBoxLayout(shelf);
-        intro->setContentsMargins(70, 45, 70, 45);
+        intro->setContentsMargins(30, 22, 30, 22);
         intro->addWidget(new MatrixBanner("墨序 · 书架"));
         intro->addSpacing(18);
         auto *shelfHome = new QWidget;
         shelfActions = new InlineActions(shelfHome);
         intro->addWidget(shelfActions, 1);
         auto *library = new QVBoxLayout(shelfHome);
-        library->addWidget(new QLabel("最近书籍"));
-        library->addWidget(recent);
-        library->addWidget(location);
-        location->setObjectName("hint");
         auto *actions = new QHBoxLayout;
         library->addLayout(actions);
+        shelfHeading->setObjectName("sectionTitle");
+        actions->addWidget(shelfHeading, 1);
         button(actions, "新建书籍", [this] { newBook(); });
         button(actions, "打开书籍…", [this] { browseBooks(); });
         button(actions, "设置保存目录", [this] { chooseStorage(); });
@@ -656,7 +749,18 @@ class Window : public QMainWindow
             pages->addWidget(page);
             pages->setCurrentWidget(page);
         });
-        connect(recent, &QListWidget::itemActivated, this, [this](auto *i) { guard([&] { openBook(i->text()); }); });
+        recent->setViewMode(QListView::IconMode);
+        recent->setMovement(QListView::Static);
+        recent->setResizeMode(QListView::Adjust);
+        recent->setSpacing(9);
+        recent->setStyleSheet("QListWidget {background:#0b1711;border:1px solid #294134;padding:8px;} "
+                              "QListWidget::item {color:transparent;padding:0;border:0;} QListWidget::item:selected "
+                              "{background:#20392b;color:transparent;}");
+        library->addWidget(recent, 1);
+        library->addWidget(location);
+        location->setObjectName("hint");
+        connect(recent, &QListWidget::itemActivated, this,
+                [this](auto *i) { guard([&] { openBook(i->data(Qt::UserRole).toString()); }); });
         pages->addWidget(storage);
         auto *storageHome = new QWidget;
         storageActions = new InlineActions(storageHome);

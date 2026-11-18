@@ -39,7 +39,7 @@ class InlineActions : public QStackedWidget
         setCurrentWidget(page);
         return layout;
     }
-    void buttons(const QString &label, std::function<void()> apply)
+    QPushButton *buttons(const QString &label, std::function<void()> apply)
     {
         auto *page = currentWidget();
         auto *message = new QLabel;
@@ -68,6 +68,7 @@ class InlineActions : public QStackedWidget
                 message->setText(QString::fromUtf8(error.what()));
             }
         });
+        return confirm;
     }
 };
 

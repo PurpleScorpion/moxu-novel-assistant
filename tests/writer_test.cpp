@@ -82,11 +82,47 @@ int main(int argc, char **argv)
     auto recent = std::find_if(lists.begin(), lists.end(), [](auto *w) { return w->isVisible(); });
     if (recent == lists.end())
         return 1;
-    auto books = (*recent)->findItems(path, Qt::MatchExactly);
-    if (books.isEmpty())
+    auto books = (*recent)->findItems("测试书", Qt::MatchExactly);
+    if (books.size() != 2)
         return 15;
-    (*recent)->setCurrentItem(books.first());
-    QTest::keyClick(*recent, Qt::Key_Return);
+    if (argc == 3 && !window.grab().save(QString::fromLocal8Bit(argv[2])))
+        return 23;
+    const auto duplicatePath = dir.filePath("新书.moxu");
+    for (auto *item : books)
+    {
+        if (QFileInfo(item->data(Qt::UserRole).toString()) != QFileInfo(duplicatePath))
+            continue;
+        auto *cover = (*recent)->itemWidget(item);
+        auto *more = cover->findChild<QToolButton *>();
+        QTest::mouseClick(more, Qt::LeftButton);
+        auto *menu = cover->findChild<QMenu *>();
+        if (!menu->isVisible() || menu->actions().first()->text() != "打开本地目录")
+            return 24;
+        menu->hide();
+        menu->actions().last()->trigger();
+        auto *input = visibleControl<QLineEdit>(window, "deleteBookTitle");
+        auto *confirm = visibleControl<QPushButton>(window, "primary");
+        if (confirm->isEnabled())
+            return 25;
+        input->setText("新书");
+        if (confirm->isEnabled())
+            return 26;
+        input->setText("测试书");
+        if (!confirm->isEnabled())
+            return 27;
+        QLockFile busy(duplicatePath + ".lock");
+        if (!busy.tryLock())
+            return 28;
+        confirm->click();
+        if (!QFileInfo::exists(duplicatePath) || visibleControl<QLabel>(window, "actionError")->text().isEmpty())
+            return 29;
+        busy.unlock();
+        confirm->click();
+        break;
+    }
+    if (QFileInfo::exists(duplicatePath) || !QFileInfo::exists(path) || (*recent)->count() != 1)
+        return 30;
+    QTest::mouseClick((*recent)->itemWidget((*recent)->item(0)), Qt::LeftButton);
     auto *editor = window.findChild<QPlainTextEdit *>("manuscript");
     if (editor->isVisible() || !window.windowTitle().contains("测试书"))
         return 2;
