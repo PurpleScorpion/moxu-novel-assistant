@@ -25,7 +25,9 @@ class EventForm : public QWidget
     QSpinBox *quantity = new QSpinBox;
     QMap<QString, qint64> inventory, recipientInventory;
     QSpinBox *delta = new QSpinBox, *uses = new QSpinBox;
-    QLineEdit *subject = new QLineEdit, *level = new QLineEdit, *cooldown = new QLineEdit, *description = new QLineEdit;
+    QComboBox *subject = new QComboBox;
+    QList<CatalogEntry> subjects;
+    QLineEdit *level = new QLineEdit, *cooldown = new QLineEdit, *description = new QLineEdit;
     QPlainTextEdit *preview = new QPlainTextEdit;
     QLabel *subjectLabel = new QLabel, *knownLabel = new QLabel;
     QList<CharacterSkill> skills;
@@ -48,7 +50,7 @@ class EventForm : public QWidget
     }
     CharacterSkill enteredSkill() const
     {
-        return {mode() == Learn ? subject->text().trimmed() : known->currentText(), level->text().trimmed(),
+        return {mode() == Learn ? subject->currentText().trimmed() : known->currentText(), level->text().trimmed(),
                 cooldown->text().trimmed(), uses->value() ? uses->value() : -1};
     }
     static QString details(const CharacterSkill &skill, bool includeUses = true)
@@ -96,16 +98,21 @@ class EventForm : public QWidget
                 inventory = book.supplyCounts(person(), chapter);
                 supply->clear();
                 supply->setEditable(mode() == ReceiveSupply);
-                for (auto it = inventory.cbegin(); it != inventory.cend(); ++it)
-                    if (mode() == ReceiveSupply || it.value() > 0)
-                        supply->addItem(it.key());
                 if (mode() == ReceiveSupply)
                 {
+                    for (const auto &entry : book.catalog("supply"))
+                        supply->addItem(entry.name);
                     supply->setEditText(old);
                     supply->lineEdit()->setPlaceholderText("输入或选择，如血瓶、回城卷轴");
                 }
-                else if (supply->findText(old) >= 0)
-                    supply->setCurrentText(old);
+                else
+                {
+                    for (auto it = inventory.cbegin(); it != inventory.cend(); ++it)
+                        if (it.value() > 0)
+                            supply->addItem(it.key());
+                    if (supply->findText(old) >= 0)
+                        supply->setCurrentText(old);
+                }
                 loadRecipientInventory();
             }
             if (mode() == Advance || mode() == Use)
@@ -140,6 +147,30 @@ class EventForm : public QWidget
         fields->setRowVisible(cooldown, m == Learn || m == Advance);
         fields->setRowVisible(uses, m == Learn);
         subjectLabel->setText(m == Acquire ? "道具名称" : "技能／功法名称");
+        if (m == Acquire || m == Learn)
+        {
+            QSignalBlocker block(subject);
+            subject->clear();
+            try
+            {
+                subjects = book.catalog(m == Acquire ? "item" : "skill");
+            }
+            catch (const std::exception &e)
+            {
+                preview->setPlainText(QString::fromUtf8(e.what()));
+                return;
+            }
+            for (const auto &entry : subjects)
+                subject->addItem(entry.name);
+            subject->setCurrentIndex(-1);
+            subject->lineEdit()->setPlaceholderText("选择本书资源，或直接输入名称");
+            if (m == Learn)
+            {
+                level->clear();
+                cooldown->clear();
+                uses->setValue(0);
+            }
+        }
         knownLabel->setText(m == Transfer ? "持有道具" : "已学技能／功法");
         description->setPlaceholderText(m == Note || m == Numeric ? "填写发生的事情" : "可补充缘由或经过");
         loadChoices();
@@ -164,7 +195,7 @@ class EventForm : public QWidget
                 text = "请先在人物档案中建立另一位人物。";
             else if ((mode() == Advance || mode() == Use) && !known->count())
                 text = "该人物截至本章尚未习得技能或功法。";
-            else if ((mode() == Acquire || mode() == Learn) && subject->text().trimmed().isEmpty())
+            else if ((mode() == Acquire || mode() == Learn) && subject->currentText().trimmed().isEmpty())
                 text = "请填写名称。";
             else if (mode() >= ReceiveSupply)
             {
@@ -235,7 +266,10 @@ class EventForm : public QWidget
         fields->addRow("资源", resources);
         delta->setRange(-1000000000, 1000000000);
         fields->addRow("变动（收＋支－）", delta);
-        subject->setObjectName("eventSubject");
+        subject->setEditable(true);
+        subject->setInsertPolicy(QComboBox::NoInsert);
+        subject->setObjectName("eventSubjectChoice");
+        subject->lineEdit()->setObjectName("eventSubject");
         fields->addRow(subjectLabel, subject);
         known->setObjectName("eventKnown");
         fields->addRow(knownLabel, known);
@@ -278,7 +312,21 @@ class EventForm : public QWidget
             }
         });
         connect(supply, &QComboBox::currentTextChanged, this, &EventForm::refreshPreview);
-        for (auto *field : {subject, level, cooldown, description})
+        connect(subject, &QComboBox::currentTextChanged, this, [this](const QString &name) {
+            if (mode() == Learn)
+            {
+                int i = subject->findText(name, Qt::MatchExactly);
+                if (i >= 0 && i < subjects.size())
+                {
+                    const auto &entry = subjects[i];
+                    level->setText(entry.level);
+                    cooldown->setText(entry.cooldown);
+                    uses->setValue(qMax(0, entry.uses));
+                }
+            }
+            refreshPreview();
+        });
+        for (auto *field : {level, cooldown, description})
             connect(field, &QLineEdit::textChanged, this, &EventForm::refreshPreview);
         for (auto *number : {uses, delta, quantity})
             connect(number, &QSpinBox::valueChanged, this, &EventForm::refreshPreview);
@@ -298,13 +346,13 @@ class EventForm : public QWidget
         case Note:
             return note;
         case Acquire:
-            text = name + "获得了" + subject->text().trimmed();
+            text = name + "获得了" + subject->currentText().trimmed();
             break;
         case Transfer:
             text = name + "将" + known->currentText() + "赠给了" + recipient->currentText();
             break;
         case Learn:
-            text = name + "习得" + subject->text().trimmed() + "（" + details(enteredSkill()) + "）";
+            text = name + "习得" + subject->currentText().trimmed() + "（" + details(enteredSkill()) + "）";
             break;
         case Advance: {
             const auto skill = enteredSkill();
@@ -346,7 +394,7 @@ class EventForm : public QWidget
             book.storyEvent(chapter, person(), StoryKind::Note, {}, 0, note, body);
             break;
         case Acquire:
-            book.storyEvent(chapter, person(), StoryKind::Acquire, subject->text(), 0, snippet(), body);
+            book.storyEvent(chapter, person(), StoryKind::Acquire, subject->currentText(), 0, snippet(), body);
             break;
         case Transfer:
             book.storyEvent(chapter, person(), StoryKind::Transfer, known->currentText(),

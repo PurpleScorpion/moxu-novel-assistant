@@ -21,6 +21,13 @@ struct LedgerFilter
 {
     QString person, resource, description;
     bool newestFirst = true;
+    QString resourceKind;
+};
+
+struct CatalogEntry
+{
+    QString kind, name, level, cooldown;
+    int uses = -1;
 };
 
 enum class StoryKind
@@ -107,6 +114,9 @@ class Book
     void skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
                     const QString &description, const QString *body = nullptr);
     QStringList resourceNames() const;
+    QList<CatalogEntry> catalog(const QString &kind = {}, bool includeHistory = false) const;
+    void saveCatalogEntry(const CatalogEntry &entry, const CatalogEntry &previous = {});
+    void removeCatalogEntry(const CatalogEntry &entry);
     void createResource(const QString &name);
     LedgerPage ledgerPage(const LedgerFilter &filter, qint64 page) const;
     void plotStep(const QString &arc, const QString &strand, int chapter, const QString &phase, const QString &note);

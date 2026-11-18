@@ -1,5 +1,7 @@
 #pragma once
 #include "book.h"
+#include "character_snapshot.h"
+#include "resource_catalog.h"
 #include "event_ledger.h"
 #include "history_settings.h"
 #include "interface.h"
@@ -24,6 +26,9 @@ class Dossier : public QWidget
     bool loading = false;
     EventLedger *ledger;
     PlotPage *plots = new PlotPage;
+    ResourceCatalog *catalogPage = new ResourceCatalog;
+    CharacterSnapshot *snapshot = new CharacterSnapshot;
+    int preferredSnapshotChapter = 0;
     QComboBox *from = new QComboBox, *to = new QComboBox;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
@@ -75,6 +80,7 @@ class Dossier : public QWidget
         }
         name->setText(oldName);
         attrs->setPlainText(oldAttrs);
+        snapshot->selectPerson(selected);
     }
     void refreshList(int id = 0)
     {
@@ -109,6 +115,7 @@ class Dossier : public QWidget
                            .toInt();
         oldName = n;
         oldAttrs = attrs->toPlainText();
+        snapshot->selectPerson(selected);
         for (int i = 0; i < people->count(); ++i)
             if (people->item(i)->data(Qt::UserRole).toInt() == selected)
             {
@@ -141,7 +148,10 @@ class Dossier : public QWidget
                                 .arg(book->value("SELECT count(*) FROM journal").toInt()));
         }
         else if (page == 1)
+        {
+            snapshot->load(*book, preferredSnapshotChapter);
             refreshList(selected);
+        }
         else if (page == 2)
         {
             edges->clear();
@@ -166,6 +176,8 @@ class Dossier : public QWidget
             ledger->load(*book);
         else if (page == plotIndex)
             plots->load(*book);
+        else if (page == plotIndex + 1)
+            catalogPage->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
@@ -187,6 +199,7 @@ class Dossier : public QWidget
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
             navigation->addItem(scopeName(scope));
         navigation->addItem("剧情大事");
+        navigation->addItem("资源管理");
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
@@ -233,7 +246,13 @@ class Dossier : public QWidget
         list->addWidget(sectionLabel("人物列表"));
         list->addWidget(people);
         people->setObjectName("personList");
-        auto *form = panelColumn(columns, 3);
+        auto *tabs = new QTabWidget;
+        tabs->setObjectName("personTabs");
+        columns->addWidget(tabs, 3);
+        auto *profile = new QWidget;
+        auto *form = new QVBoxLayout(profile);
+        tabs->addTab(profile, "档案资料");
+        tabs->addTab(snapshot, "章节快照");
         form->addWidget(new QLabel("姓名"));
         form->addWidget(name);
         name->setObjectName("personName");
@@ -241,12 +260,13 @@ class Dossier : public QWidget
         form->addWidget(attrs, 1);
         attrs->setPlaceholderText("境界：筑基\n所属势力：青云宗");
         attrs->setObjectName("personAttrs");
-        connect(btn("新建人物", list), &QPushButton::clicked, this, [this] {
+        connect(btn("新建人物", list), &QPushButton::clicked, this, [this, tabs] {
             safe([&] {
                 flushPerson();
                 QSignalBlocker b(people);
                 people->setCurrentRow(-1);
                 loadPerson(-1);
+                tabs->setCurrentIndex(0);
                 name->setFocus();
                 notice->setText("填写姓名后，人物资料会自动保存");
             });
@@ -329,6 +349,7 @@ class Dossier : public QWidget
             section(scopeName(scope), false)->addWidget(editor, 1);
         }
         section("剧情大事")->addWidget(plots, 1);
+        section("资源管理")->addWidget(catalogPage, 1);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;
@@ -413,6 +434,7 @@ class Dossier : public QWidget
     void enter(Book *source, int page = 0, int preferredChapter = 0)
     {
         book = source;
+        preferredSnapshotChapter = preferredChapter;
         if (bookFile != source->filePath())
             selected = 0;
         bookFile = source->filePath();

@@ -501,15 +501,12 @@ class Window : public QMainWindow
         tools->hide();
         directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
     }
-    void openResourcePage(std::function<void(const QString &)> created)
+    void openResourcePage(bool numericOnly, std::function<void(const CatalogEntry &)> created)
     {
         auto *origin = pages->currentWidget();
         auto *page = new QWidget;
         auto *layout = new QVBoxLayout(page);
         layout->setContentsMargins(32, 24, 32, 24);
-        auto *header = new QHBoxLayout;
-        layout->addLayout(header);
-        header->addWidget(sectionLabel("新建本书资源"), 1);
         auto back = [this, origin, page] {
             pages->setCurrentWidget(origin);
             pages->removeWidget(page);
@@ -517,47 +514,25 @@ class Window : public QMainWindow
             tools->setVisible(origin == writer);
             statusBar()->setVisible(origin == writer);
         };
-        button(header, "返回", back);
-        layout->addSpacing(16);
-        layout->addWidget(new QLabel("资源名称"));
-        auto *name = new QLineEdit;
-        name->setMaximumWidth(480);
-        name->setObjectName("newResourceName");
-        name->setPlaceholderText("例如：灵石、声望");
-        layout->addWidget(name);
-        auto *notice = new QLabel("创建后可用于记录收支，也可在人物属性模板中引用。");
-        notice->setTextFormat(Qt::PlainText);
-        notice->setWordWrap(true);
-        layout->addWidget(notice);
-        auto *create = new QPushButton("创建");
-        create->setObjectName("primary");
-        layout->addWidget(create, 0, Qt::AlignLeft);
-        layout->addStretch();
-        connect(create, &QPushButton::clicked, page, [=, this] {
-            const auto resource = name->text().trimmed();
-            try
-            {
-                book->createResource(resource);
-            }
-            catch (const std::exception &e)
-            {
-                notice->setText(QString::fromUtf8(e.what()));
-                return;
-            }
-            back();
-            created(resource);
-        });
-        connect(name, &QLineEdit::returnPressed, create, &QPushButton::click);
+        auto *form = new CatalogEditor(
+            *book, {}, numericOnly,
+            [back, created](const CatalogEntry &entry) {
+                back();
+                created(entry);
+            },
+            back);
+        layout->addWidget(form, 1);
         pages->addWidget(page);
         pages->setCurrentWidget(page);
         tools->hide();
         statusBar()->hide();
-        name->setFocus();
+        form->setFocus();
     }
     void record(bool insertInText = true)
     {
         beginSheet("记录事件 · 第 " + QString::number(chapters->currentRow() + 1) + " 章");
-        auto *form = new EventForm(*book, chapter, [this](auto done) { openResourcePage(done); });
+        auto *form =
+            new EventForm(*book, chapter, [this](bool numericOnly, auto done) { openResourcePage(numericOnly, done); });
         form->insert->setChecked(insertInText);
         sheet->form->addWidget(form);
         button(sheet->form, "保存事件", [this, form] {
@@ -1131,7 +1106,8 @@ class Window : public QMainWindow
         };
         dossier = new Dossier(
             focusWriter, [this] { showShelf(); }, [this] { graph(); },
-            [this](QString n) { setWindowTitle(n + " · 墨序"); }, [this](auto done) { openResourcePage(done); },
+            [this](QString n) { setWindowTitle(n + " · 墨序"); },
+            [this](bool numericOnly, auto done) { openResourcePage(numericOnly, done); },
             [this, focusWriter] {
                 guard([&] {
                     dossier->flush();

@@ -361,6 +361,63 @@ int main(int argc, char **argv)
         action("时间轴");
         check(visible<QTextEdit>(sheet()).first()->toPlainText().contains("玄武门之变 · 宫门部署 · 开始"),
               "时间轴缺少并行剧情");
+        action("返回资料工作区");
+        auto *nav = window.findChild<QListWidget *>("navigation");
+        nav->setCurrentItem(nav->findItems("资源管理", Qt::MatchExactly).first());
+        auto *catalog = window.findChild<QTableWidget *>("catalogTable");
+        auto pickCatalog = [&](QString text) {
+            auto matches = catalog->findItems(text, Qt::MatchExactly);
+            check(!matches.isEmpty(), "资源目录缺少条目");
+            catalog->setCurrentItem(matches.first());
+        };
+        pickCatalog("盘古幡");
+        click(window, "编辑");
+        visible<QLineEdit>(window).first()->setText("混元幡");
+        click(window, "保存修改");
+        pickCatalog("混元幡");
+        click(window, "删除");
+        check(catalog->findItems("盘古幡", Qt::MatchExactly).isEmpty() &&
+                  catalog->findItems("混元幡", Qt::MatchExactly).isEmpty(),
+              "目录改删后旧条目重新出现");
+        click(window, "新建资源");
+        auto *kind = visible<QComboBox>(window).first();
+        kind->setCurrentText("技能／功法");
+        auto texts = visible<QLineEdit>(window);
+        texts[0]->setText("上清仙法");
+        texts[1]->setText("第二重");
+        texts[2]->setText("一日");
+        visible<QSpinBox>(window).first()->setValue(3);
+        click(window, "创建");
+        pickCatalog("上清仙法");
+        nav->setCurrentRow(3);
+        click(window, "重置");
+        auto *filter = visible<QComboBox>(window).first();
+        filter->setCurrentText("盘古幡");
+        check(ledger->rowCount() == 2 && ledger->item(0, 2)->text() == "盘古幡", "旧道具名筛选失效");
+        click(window, "进入专注写作");
+        action("记录事件");
+        setMode("习得技能／功法");
+        sheet().findChild<QComboBox *>("eventSubjectChoice")->setCurrentText("上清仙法");
+        check(visible<QSpinBox>(sheet()).first()->value() == 3, "技能目录未带入初始次数");
+        click(sheet(), "保存事件");
+        verify.supplyEvent(2, 1, SupplyAction::Receive, "蓝瓶", 3, 0, "买药");
+        action("返回资料工作区");
+        nav->setCurrentRow(1);
+        auto *snapshotChapter = window.findChild<QComboBox *>("snapshotChapter");
+        auto *tabs = window.findChild<QTabWidget *>("personTabs");
+        check(tabs, "缺少人物档案标签页");
+        tabs->setCurrentIndex(1);
+        auto *report = window.findChild<QTextBrowser *>("snapshotReport");
+        check(report->isVisible(), "未显示章节快照");
+        snapshotChapter->setCurrentIndex(0);
+        auto first = report->toPlainText();
+        check(first.contains("上清仙法") && first.contains("第二重") && first.contains("一日") &&
+                  first.contains("12") && !first.contains("蓝瓶") && !first.contains("盘古幡"),
+              "第一章人物快照不符");
+        snapshotChapter->setCurrentIndex(1);
+        check(report->toPlainText().contains("蓝瓶") && report->toPlainText().contains("22"), "第二章库存或收支未更新");
+        window.findChild<QListWidget *>("personList")->setCurrentRow(1);
+        check(report->toPlainText().contains("盘古幡") && !report->toPlainText().contains("上清仙法"), "快照串用人物");
         check(watch.shown.isEmpty(), "专注写作中出现了对话框");
     }
     catch (const std::exception &e)

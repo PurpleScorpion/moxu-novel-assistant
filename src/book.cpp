@@ -128,6 +128,18 @@ Book::Book(const QString &path, const QString &newTitle)
         run("CREATE TABLE IF NOT EXISTS supplies(event_id INTEGER PRIMARY KEY REFERENCES events ON DELETE CASCADE,"
             "name TEXT NOT NULL,change INTEGER NOT NULL CHECK(change<>0),recipient INTEGER REFERENCES people)");
         run("CREATE INDEX IF NOT EXISTS supply_name ON supplies(name,event_id)");
+        run("CREATE TABLE IF NOT EXISTS catalog_edits(kind TEXT NOT NULL,name TEXT NOT NULL,listed INTEGER NOT NULL,"
+            "level TEXT,cooldown TEXT,uses INTEGER,PRIMARY KEY(kind,name))");
+        run("CREATE VIEW IF NOT EXISTS resource_history AS SELECT 'numeric' AS kind,resource AS name FROM events WHERE "
+            "resource<>'' "
+            "UNION SELECT CASE WHEN kind IN ('acquire','transfer') THEN 'item' ELSE 'skill' END,name FROM "
+            "event_details "
+            "WHERE kind<>'note' UNION SELECT 'supply',name FROM supplies");
+        run("CREATE VIEW IF NOT EXISTS book_catalog AS SELECT k.kind,k.name,c.level,c.cooldown,c.uses FROM "
+            "(SELECT 'numeric' AS kind,'积分' AS name UNION SELECT 'numeric',name FROM resources UNION SELECT "
+            "kind,name FROM resource_history "
+            "UNION SELECT kind,name FROM catalog_edits) k LEFT JOIN catalog_edits c USING(kind,name) WHERE "
+            "coalesce(c.listed,1)=1");
         run("CREATE VIEW IF NOT EXISTS supply_flows AS SELECT s.name,e.id,e.chapter,e.person,s.change "
             "FROM supplies s JOIN events e ON e.id=s.event_id UNION ALL "
             "SELECT s.name,e.id,e.chapter,s.recipient,-s.change FROM supplies s JOIN events e ON e.id=s.event_id "
@@ -277,19 +289,36 @@ qint64 Book::balance(int person, const QString &resource, int chapter) const
 }
 QStringList Book::resourceNames() const
 {
-    auto q = run("SELECT name FROM (SELECT name FROM resources UNION SELECT resource FROM events WHERE resource<>'' "
-                 "UNION SELECT '积分') "
-                 "ORDER BY name!='积分',name");
     QStringList names;
-    while (q.next())
-        names.append(q.value(0).toString());
+    for (const auto &entry : catalog("numeric"))
+        names << entry.name;
     return names;
+}
+QList<CatalogEntry> Book::catalog(const QString &kind, bool includeHistory) const
+{
+    QString source = "SELECT kind,name,level,cooldown,uses FROM book_catalog";
+    if (includeHistory)
+        source += " UNION ALL SELECT h.kind,h.name,NULL,NULL,NULL FROM resource_history h "
+                  "JOIN catalog_edits c USING(kind,name) WHERE c.listed=0";
+    auto sql = "SELECT kind,name,level,cooldown,uses FROM (" + source + ")";
+    QVariantList args;
+    if (!kind.isEmpty())
+    {
+        sql += " WHERE kind=?";
+        args << kind;
+    }
+    auto q = run(sql + " ORDER BY kind!='numeric',kind,name!='积分',name", args);
+    QList<CatalogEntry> entries;
+    while (q.next())
+        entries.append({q.value(0).toString(), q.value(1).toString(), q.value(2).toString(), q.value(3).toString(),
+                        q.value(4).isNull() ? -1 : q.value(4).toInt()});
+    return entries;
 }
 QMap<QString, QString> Book::resourceBalances(int person, int chapter) const
 {
     QMap<QString, QString> balances;
-    for (const auto &name : resourceNames())
-        balances.insert(name, "0");
+    for (const auto &entry : catalog("numeric", true))
+        balances.insert(entry.name, "0");
     auto rows =
         run("SELECT resource,sum(delta) FROM events WHERE person=? AND chapter<=? AND resource<>'' GROUP BY resource",
             {person, chapter});
@@ -299,16 +328,30 @@ QMap<QString, QString> Book::resourceBalances(int person, int chapter) const
 }
 void Book::createResource(const QString &name)
 {
-    const auto clean = name.trimmed();
+    saveCatalogEntry({"numeric", name});
+}
+void Book::removeCatalogEntry(const CatalogEntry &entry)
+{
+    run("INSERT INTO catalog_edits(kind,name,listed) VALUES(?,?,0) ON CONFLICT(kind,name) DO UPDATE SET listed=0",
+        {entry.kind, entry.name});
+}
+void Book::saveCatalogEntry(const CatalogEntry &entry, const CatalogEntry &previous)
+{
+    const auto clean = entry.name.trimmed();
     if (clean.isEmpty())
         fail("请填写资源名。");
+    if (!QStringList{"numeric", "item", "supply", "skill"}.contains(entry.kind))
+        fail("请选择资源类型。");
     atomic([&] {
-        if (clean == "积分" || value("SELECT 1 FROM resources WHERE name=? UNION ALL "
-                                     "SELECT 1 FROM events WHERE resource=? LIMIT 1",
-                                     {clean, clean})
-                                   .isValid())
-            fail("本书已有同名资源，请从列表选择。");
-        run("INSERT INTO resources(name) VALUES(?)", {clean});
+        if (previous.kind != entry.kind || previous.name != clean)
+        {
+            if (value("SELECT 1 FROM book_catalog WHERE kind=? AND name=?", {entry.kind, clean}).isValid())
+                fail("本书已有同类型同名资源。");
+            if (!previous.kind.isEmpty())
+                removeCatalogEntry(previous);
+        }
+        run("INSERT OR REPLACE INTO catalog_edits(kind,name,listed,level,cooldown,uses) VALUES(?,?,1,?,?,?)",
+            {entry.kind, clean, entry.level, entry.cooldown, entry.uses < 0 ? QVariant() : QVariant(entry.uses)});
     });
 }
 LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
@@ -325,8 +368,14 @@ LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
     }
     if (!filter.resource.isEmpty())
     {
-        from += " AND e.resource=?";
+        from += " AND coalesce(d.name,s.name,e.resource)=?";
         args << filter.resource;
+        if (!filter.resourceKind.isEmpty())
+        {
+            from += " AND CASE WHEN s.name IS NOT NULL THEN 'supply' WHEN d.kind IN ('acquire','transfer') THEN 'item' "
+                    "WHEN d.name IS NOT NULL THEN 'skill' ELSE 'numeric' END=?";
+            args << filter.resourceKind;
+        }
     }
     if (!filter.description.isEmpty())
     {

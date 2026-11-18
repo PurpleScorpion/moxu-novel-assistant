@@ -51,7 +51,8 @@ class EventLedger : public QWidget
     void search()
     {
         applied = {person->text().trimmed(), resources->choices->currentData().toString(),
-                   description->text().trimmed(), sort->currentIndex() == 0};
+                   description->text().trimmed(), sort->currentIndex() == 0,
+                   resources->choices->currentData(Qt::UserRole + 1).toString()};
         showPage(1);
     }
 
@@ -136,7 +137,13 @@ class EventLedger : public QWidget
         description->setText(applied.description);
         QSignalBlocker order(sort);
         sort->setCurrentIndex(applied.newestFirst ? 0 : 1);
-        resources->load(source, applied.resource);
+        resources->load(source, applied.resource, applied.resourceKind);
+        if (resources->choices->currentIndex() == 0 && !applied.resource.isEmpty())
+        {
+            applied.resource.clear();
+            applied.resourceKind.clear();
+            page = 1;
+        }
         showPage(page);
     }
 };

@@ -227,6 +227,21 @@ int main(int argc, char **argv)
                 QStringList{"林澈 → 苏禾", "血瓶", "-1", "2"} ||
             other.ledgerPage({"苏", "", "服药"}, 1).rows.first().at(4) != "0")
             return 31;
+        other.event(1, 1, "太极图", 8, "同名数值");
+        if (other.ledgerPage({"", "太极图", "", true, "item"}, 1).total != 2 ||
+            other.ledgerPage({"", "太极图", "", true, "numeric"}, 1).total != 1 ||
+            other.ledgerPage({"", "血瓶", "", true, "supply"}, 1).total != 4 ||
+            other.ledgerPage({"", "一气化三清", "", true, "skill"}, 1).total != 8)
+            return 32;
+        other.saveCatalogEntry({"item", "太极图摹本"}, {"item", "太极图"});
+        other.removeCatalogEntry({"numeric", "太极图"});
+        other.removeCatalogEntry({"supply", "血瓶"});
+        if (!reopened.catalog("supply").isEmpty() || reopened.catalog("supply", true).first().name != "血瓶" ||
+            reopened.catalog("item").first().name != "太极图摹本" ||
+            reopened.ownedItems(2, 3) != QStringList{"太极图"} ||
+            reopened.resourceBalances(1, 1).value("太极图") != "8" || reopened.supplyCounts(1, 2).value("血瓶") != 3 ||
+            reopened.ledgerPage({"", "太极图", "", true, "item"}, 1).total != 2)
+            return 33;
     }
     catch (const std::exception &e)
     {

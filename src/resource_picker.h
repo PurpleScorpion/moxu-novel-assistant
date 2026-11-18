@@ -1,12 +1,13 @@
 #pragma once
-#include "book.h"
+#include "resource_catalog.h"
 #include <QtWidgets>
 
-using OpenResourcePage = std::function<void(std::function<void(const QString &)>)>;
+using OpenResourcePage = std::function<void(bool, std::function<void(const CatalogEntry &)>)>;
 
 class ResourcePicker : public QWidget
 {
     bool includeAll;
+    Book *book = nullptr;
 
   public:
     QComboBox *choices = new QComboBox;
@@ -23,20 +24,35 @@ class ResourcePicker : public QWidget
         row->addWidget(add);
         add->setVisible(bool(open));
         connect(add, &QPushButton::clicked, this, [this, open] {
-            open([this](const QString &name) {
-                choices->addItem(name, name);
-                choices->setCurrentIndex(choices->count() - 1);
-            });
+            open(!this->includeAll, [this](const CatalogEntry &entry) { load(*book, entry.name, entry.kind, true); });
         });
     }
-    void load(Book &source, const QString &selection = {})
+    void load(Book &source, const QString &selection = {}, const QString &kind = {}, bool notify = false)
     {
+        book = &source;
         QSignalBlocker block(choices);
         choices->clear();
         if (includeAll)
             choices->addItem("全部资源");
-        for (const auto &resource : source.resourceNames())
-            choices->addItem(resource, resource);
-        choices->setCurrentIndex(qMax(0, choices->findData(selection)));
+        auto entries = source.catalog(includeAll ? QString() : QString("numeric"), includeAll);
+        QHash<QString, int> counts;
+        for (const auto &entry : entries)
+            ++counts[entry.name];
+        int selected = 0;
+        for (const auto &entry : entries)
+        {
+            choices->addItem(counts[entry.name] > 1 ? entry.name + " · " + resourceKindLabel(entry.kind) : entry.name,
+                             entry.name);
+            int index = choices->count() - 1;
+            choices->setItemData(index, entry.kind, Qt::UserRole + 1);
+            if (entry.name == selection && (kind.isEmpty() || entry.kind == kind))
+                selected = index;
+        }
+        if (notify)
+        {
+            choices->setCurrentIndex(-1);
+            block.unblock();
+        }
+        choices->setCurrentIndex(selected);
     }
 };
