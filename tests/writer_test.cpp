@@ -175,8 +175,22 @@ int main(int argc, char **argv)
         return 10;
     name->setText("林澈");
     attrs->setPlainText("境界：筑基\n宗门：青云宗");
-    if (!click("保存人物"))
+    Book verify(path);
+    auto *personStatus = visibleControl<QLabel>(window, "saveStatus");
+    if (!QTest::qWaitFor(
+            [&] {
+                return verify.value("SELECT attributes FROM people WHERE name='林澈'").toString() ==
+                       attrs->toPlainText();
+            },
+            4000))
+        return 40;
+    if (!click("保存人物") || !personStatus->text().startsWith("✓ 人物资料已保存"))
         return 11;
+    attrs->appendPlainText("剑修");
+    QTest::keyClick(attrs, Qt::Key_S, Qt::ControlModifier);
+    if (!personStatus->text().startsWith("✓ 人物资料已保存") ||
+        verify.value("SELECT attributes FROM people WHERE name='林澈'").toString() != attrs->toPlainText())
+        return 41;
     attrs->appendPlainText("身份：外门弟子");
     nav->setCurrentRow(2);
     nav->setCurrentRow(1);
@@ -195,7 +209,6 @@ int main(int argc, char **argv)
         return 4;
     editor->insertPlainText("买下丹药。");
     QTest::qWait(2100);
-    Book verify(path);
     if (verify.value("SELECT body FROM chapters WHERE id=1").toString() != "林澈获得了300积分。" ||
         verify.value("SELECT body FROM chapters WHERE id=2").toString() != "买下丹药。")
         return 5;
@@ -204,11 +217,11 @@ int main(int argc, char **argv)
     };
     editor->insertPlainText("又得一枚。");
     QTest::keyClick(editor, Qt::Key_S, Qt::ControlModifier);
-    if (!saved())
+    if (!saved() || !visibleControl<QLabel>(window, "saveStatus")->text().startsWith("✓ 当前章节已保存"))
         return 37;
     editor->insertPlainText("收入囊中。");
     window.findChild<QPushButton *>("saveChapter")->click();
-    if (!saved())
+    if (!saved() || !visibleControl<QLabel>(window, "saveStatus")->text().startsWith("✓ 当前章节已保存"))
         return 38;
     editor->insertPlainText("转身下山。");
     app.applicationStateChanged(Qt::ApplicationInactive);

@@ -149,6 +149,34 @@ int main(int argc, char **argv)
         edit(5, "同名规则", "对白用短句");
         edit(5, "未选规则", "禁止外发的资料");
         edit(6, "入山", "在山门遇到师父");
+        Book verify(path);
+        for (auto page : {4, 5, 6})
+        {
+            nav->setCurrentRow(page);
+            auto *body = visible<QPlainTextEdit>(window);
+            const QString original = body->toPlainText();
+            body->appendPlainText("自动保存测试");
+            const auto scope = page == 4 ? NoteScope::Global : page == 5 ? NoteScope::Book : NoteScope::Outline;
+            auto stored = [&] { return WritingNotes(verify, scope).list().last().body; };
+            require(QTest::qWaitFor([&] { return stored() == body->toPlainText(); }, 4000),
+                    "资料未定时落盘或切页后选错条目");
+            body->setPlainText(original + "！");
+            nav->setCurrentRow(1);
+            nav->setCurrentRow(page);
+            require(body->toPlainText() == original + "！", "切回页面丢失修改");
+            body->setPlainText(original);
+            QTest::keyClick(body, Qt::Key_S, Qt::ControlModifier);
+            require(stored() == original, "资料快捷保存失败");
+            auto feedback = [&] {
+                for (auto *label : window.findChildren<QLabel *>("saveStatus"))
+                    if (label->isVisible() && label->text().startsWith("✓ " + scopeName(scope)))
+                        return true;
+                return false;
+            };
+            require(feedback(), "资料快捷保存无反馈");
+            click(window, "保存");
+            require(feedback(), "重复点击保存无反馈");
+        }
         {
             Book other(dir.filePath("乙.moxu"), "乙");
             require(WritingNotes(other, NoteScope::Global).list().size() == 1, "全局 Skill 未共享");

@@ -120,9 +120,31 @@ int main(int argc, char **argv)
         click(sheet(), "保存事件");
         check(verify.balance(1, "积分", 1) == 240 && editor->toPlainText() == before, "仅记账改变了正文");
         action("历史版本");
+        auto *versions = sheet().findChild<QListWidget *>("historyVersions");
+        check(versions && versions->isVisible() && versions->count() >= 2, "历史版本列表未显示");
+        versions->setCurrentRow(1);
+        check(preview()->toPlainText() ==
+                  verify.value("SELECT body FROM revisions WHERE id=?", {versions->currentItem()->data(Qt::UserRole)})
+                      .toString(),
+              "切换版本后预览错误");
+        versions->setCurrentRow(0);
         check(preview()->toPlainText() == "开头面板结尾", "历史预览错误");
         click(sheet(), "用此版本恢复本章");
         check(editor->toPlainText() == "开头面板结尾", "历史恢复错误");
+        verify.run("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<14) "
+                   "INSERT INTO revisions(chapter,body) SELECT 1,'旧稿' FROM n");
+        action("历史版本");
+        click(sheet(), "整理全书旧版历史…");
+        const auto toRemove = verify.historyCleanupCount();
+        check(toRemove > 0, "整理应预告淘汰的旧稿");
+        click(sheet(), "返回历史版本");
+        check(verify.value("SELECT count(*) FROM revisions WHERE rolling=0").toInt() == 14, "取消整理丢失旧历史");
+        click(sheet(), "整理全书旧版历史…");
+        click(sheet(), "确认整理");
+        check(verify.value("SELECT count(*) FROM revisions").toInt() == Book::chapterHistoryLimit &&
+                  verify.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&
+                  sheet().findChild<QLabel *>("sheetMessage")->text().contains(QString::number(toRemove)),
+              "整理后数量或正文有误");
         action("时间轴");
         check(preview()->toPlainText().contains("240"), "时间轴错误");
         action("关系图");

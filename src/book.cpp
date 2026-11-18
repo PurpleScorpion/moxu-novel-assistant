@@ -112,6 +112,12 @@ Book::Book(const QString &path, const QString &newTitle)
                 "('skill','outline')), title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER REFERENCES chapters, "
                 "revision INTEGER NOT NULL DEFAULT 1,skill_header TEXT NOT NULL DEFAULT '')");
         ensureSkillHeaderColumn(db);
+        if (!value("SELECT 1 FROM pragma_table_info('revisions') WHERE name='rolling'").isValid())
+            atomic([&] {
+                if (!value("SELECT 1 FROM pragma_table_info('revisions') WHERE name='rolling'").isValid())
+                    run("ALTER TABLE revisions ADD COLUMN rolling INTEGER NOT NULL DEFAULT 0");
+            });
+        run("CREATE INDEX IF NOT EXISTS revision_history ON revisions(rolling,chapter,id)");
     }
     catch (...)
     {
@@ -129,14 +135,73 @@ Book::~Book()
     db = {};
     QSqlDatabase::removeDatabase(connection);
 }
-void Book::save(int chapter, const QString &body)
+QList<qint64> Book::historiesToKeep(bool includeLegacy) const
+{
+    // SQLite can read octet_length of a stored column without loading its text.
+    QString sql = "SELECT id,chapter,octet_length(body) FROM revisions";
+    if (!includeLegacy)
+        sql += " WHERE rolling=1";
+    auto rows = run(sql + " ORDER BY id DESC");
+    QList<qint64> keep;
+    QHash<int, int> chapterCounts;
+    qint64 remaining = historyBudget;
+    while (keep.size() < bookHistoryLimit && rows.next())
+    {
+        const int chapter = rows.value(1).toInt();
+        const auto bytes = rows.value(2).toLongLong();
+        if (chapterCounts.value(chapter) >= chapterHistoryLimit || bytes > remaining)
+            continue;
+        keep.append(rows.value(0).toLongLong());
+        ++chapterCounts[chapter];
+        remaining -= bytes;
+    }
+    return keep;
+}
+void Book::trimHistory(bool includeLegacy, const QList<qint64> &keep)
+{
+    QStringList keepIds;
+    for (const auto id : keep)
+        keepIds.append(QString::number(id));
+    QString sql = includeLegacy ? "DELETE FROM revisions WHERE 1" : "DELETE FROM revisions WHERE rolling=1";
+    if (!keepIds.isEmpty())
+        sql += " AND id NOT IN (" + keepIds.join(',') + ")";
+    run(sql);
+}
+qint64 Book::historyCleanupCount() const
+{
+    return value("SELECT count(*) FROM revisions").toLongLong() - historiesToKeep(true).size();
+}
+void Book::includeLegacyInHistoryLimit(qint64 expectedRemoval)
+{
+    atomic([&] {
+        const auto keep = historiesToKeep(true);
+        if (value("SELECT count(*) FROM revisions").toLongLong() - keep.size() != expectedRemoval)
+            fail("历史版本已变化，请返回后重新预览。");
+        trimHistory(true, keep);
+        run("UPDATE revisions SET rolling=1 WHERE rolling=0");
+    });
+}
+void Book::save(int chapter, const QString &body, SaveMode mode)
 {
     auto previous = value("SELECT body FROM chapters WHERE id=?", {chapter});
     if (!previous.isValid())
         fail("章节不存在。");
     if (previous.toString() == body)
         return;
-    run("INSERT INTO revisions(chapter,body) VALUES(?,?)", {chapter, previous});
+    const bool checkpoint = mode == SaveMode::Checkpoint ||
+                            (!previous.toString().isEmpty() &&
+                             !value("SELECT COALESCE((SELECT stamp > datetime('now','-5 minutes') FROM revisions "
+                                    "WHERE chapter=? AND rolling=1 ORDER BY id DESC LIMIT 1),0)",
+                                    {chapter})
+                                  .toBool());
+    if (checkpoint)
+    {
+        auto inserted = run("INSERT INTO revisions(chapter,body,rolling) SELECT id,body,1 FROM chapters "
+                            "WHERE id=? AND octet_length(body)<=?",
+                            {chapter, historyBudget});
+        if (inserted.numRowsAffected())
+            trimHistory(false, historiesToKeep(false));
+    }
     run("UPDATE chapters SET body=? WHERE id=?", {body, chapter});
 }
 qint64 Book::balance(int person, const QString &resource, int chapter) const

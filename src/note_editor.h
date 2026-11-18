@@ -1,5 +1,6 @@
 #pragma once
 #include "inline_files.h"
+#include "save_status.h"
 #include "skill_file.h"
 #include <QtWidgets>
 
@@ -12,10 +13,12 @@ class NoteEditor : public QWidget
     QLineEdit *title = new QLineEdit;
     QPlainTextEdit *body = new QPlainTextEdit;
     QComboBox *chapters = new QComboBox;
-    QLabel *status = new QLabel;
+    SaveStatus *status = new SaveStatus;
     QPushButton *removeButton = new QPushButton("删除");
     WritingNote saved;
     QString displayedBody;
+    QString bookFile;
+    bool loading = false;
     QHash<qint64, WritingNote> records;
 
     QString skillFolder() const
@@ -40,6 +43,8 @@ class NoteEditor : public QWidget
     }
     void load(qint64 id)
     {
+        QScopedValueRollback guard(loading, true);
+        status->pending.stop();
         saved = records.value(id);
         title->setText(saved.title);
         body->setPlainText(saved.body);
@@ -197,14 +202,15 @@ class NoteEditor : public QWidget
                 title->setFocus();
             });
         });
-        connect(commit, &QPushButton::clicked, this, [this] {
-            attempt([&] {
-                if (title->text().trimmed().isEmpty())
-                    throw std::runtime_error("请填写标题。");
-                flush();
-                status->setText("已保存");
-            });
-        });
+        connect(commit, &QPushButton::clicked, this, &NoteEditor::saveNow);
+        auto edited = [this] {
+            if (!loading)
+                status->edited();
+        };
+        connect(title, &QLineEdit::textChanged, this, edited);
+        connect(body, &QPlainTextEdit::textChanged, this, edited);
+        connect(chapters, &QComboBox::currentIndexChanged, this, edited);
+        connect(&status->pending, &QTimer::timeout, this, [this] { attempt([this] { flush(); }); });
         connect(reset, &QPushButton::clicked, this, [this] {
             attempt([&] {
                 reload(saved.id);
@@ -218,8 +224,8 @@ class NoteEditor : public QWidget
             prompt->setWordWrap(true);
             fields->addWidget(prompt);
             fields->addStretch();
-            actions->buttons("确认删除", [this, record = saved] {
-                WritingNotes(*book, this->scope).remove(record);
+            actions->buttons("确认删除", [this] {
+                WritingNotes(*book, this->scope).remove(saved);
                 reload(0);
                 status->setText("已删除");
             });
@@ -241,8 +247,11 @@ class NoteEditor : public QWidget
     }
     void enter(Book *source)
     {
+        QScopedValueRollback guard(loading, true);
         actions->finish();
         book = source;
+        const auto preferred = scope == NoteScope::Global || bookFile == book->filePath() ? saved.id : 0;
+        bookFile = book->filePath();
         chapters->clear();
         chapters->addItem("全书", 0);
         if (scope == NoteScope::Outline)
@@ -251,7 +260,7 @@ class NoteEditor : public QWidget
             while (q.next())
                 chapters->addItem(q.value(1).toString(), q.value(0));
         }
-        reload(0);
+        reload(preferred);
         status->clear();
     }
     void showImported(qint64 id)
@@ -261,14 +270,19 @@ class NoteEditor : public QWidget
     }
     void flush()
     {
+        status->pending.stop();
         WritingNote draft = saved;
-        draft.title = title->text();
+        draft.title = title->text().trimmed();
         const auto editedBody = body->toPlainText();
         if (editedBody != displayedBody)
             draft.body = editedBody;
         draft.chapter = chapters->currentData().toInt();
         if (draft.title == saved.title && draft.body == saved.body && draft.chapter == saved.chapter)
+        {
+            if (status->text() == "等待自动保存…")
+                status->setText("没有待保存的更改");
             return;
+        }
         draft = WritingNotes(*book, scope).save(draft);
         QSignalBlocker block(entries);
         auto *item = findEntry(draft.id);
@@ -282,8 +296,23 @@ class NoteEditor : public QWidget
         entries->setCurrentItem(item);
         saved = draft;
         displayedBody = editedBody;
-        title->setText(saved.title);
         removeButton->setEnabled(true);
-        status->setText("已保存");
+        status->setText("已自动保存");
+    }
+    void savePending()
+    {
+        if (status->pending.isActive())
+            attempt([this] { flush(); });
+    }
+    void saveNow()
+    {
+        if (actions->currentIndex() != 0)
+            return;
+        attempt([this] {
+            if (title->text().trimmed().isEmpty())
+                throw std::runtime_error("请填写标题。");
+            flush();
+            status->confirm(scopeName(scope));
+        });
     }
 };

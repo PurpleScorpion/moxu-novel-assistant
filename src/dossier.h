@@ -13,12 +13,16 @@ class Dossier : public QWidget
     QPlainTextEdit *attrs = new QPlainTextEdit;
     QPlainTextEdit *synopsis = new QPlainTextEdit;
     QLineEdit *genre = new QLineEdit;
-    QString savedSynopsis, savedGenre;
-    QLabel *notice = new QLabel, *counts = new QLabel;
+    QString savedTitle, savedSynopsis, savedGenre, bookFile;
+    SaveStatus *notice = new SaveStatus;
+    QLabel *counts = new QLabel;
+    std::function<void(QString)> renameBook;
+    bool loading = false;
     QTableWidget *ledger = new QTableWidget;
     QComboBox *from = new QComboBox, *to = new QComboBox;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
+    QPushButton *saveRelation;
     int selected = 0;
     QList<NoteEditor *> notePages;
     QString oldName, oldAttrs;
@@ -53,6 +57,8 @@ class Dossier : public QWidget
     }
     void loadPerson(int row)
     {
+        QScopedValueRollback guard(loading, true);
+        notice->pending.stop();
         selected = row < 0 ? 0 : people->item(row)->data(Qt::UserRole).toInt();
         auto q = book->run("SELECT name,attributes FROM people WHERE id=?", {selected});
         oldName.clear();
@@ -85,9 +91,9 @@ class Dossier : public QWidget
     }
     void flushPerson()
     {
-        if (!book || (name->text() == oldName && attrs->toPlainText() == oldAttrs))
-            return;
         QString n = name->text().trimmed();
+        if (!book || (n == oldName && attrs->toPlainText() == oldAttrs))
+            return;
         if (n.isEmpty())
             throw std::runtime_error("请填写人物姓名。");
         if (selected)
@@ -98,21 +104,25 @@ class Dossier : public QWidget
                            .toInt();
         oldName = n;
         oldAttrs = attrs->toPlainText();
-        name->setText(n);
         for (int i = 0; i < people->count(); ++i)
             if (people->item(i)->data(Qt::UserRole).toInt() == selected)
             {
                 people->item(i)->setText(n);
                 return;
             }
+        QSignalBlocker block(people);
         auto *item = new QListWidgetItem(n, people);
         item->setData(Qt::UserRole, selected);
+        if (people->currentRow() < 0)
+            people->setCurrentItem(item);
     }
     void refreshPage(int page)
     {
+        QScopedValueRollback guard(loading, true);
         if (page == 0)
         {
-            title->setText(book->value("SELECT title FROM meta").toString());
+            savedTitle = book->value("SELECT title FROM meta").toString();
+            title->setText(savedTitle);
             auto info = book->run("SELECT genre,synopsis FROM book_profile WHERE id=1");
             info.next();
             savedGenre = info.value(0).toString();
@@ -167,6 +177,7 @@ class Dossier : public QWidget
   public:
     Dossier(std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
             std::function<void(QString)> rename)
+        : renameBook(std::move(rename))
     {
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(0, 0, 0, 0);
@@ -211,13 +222,7 @@ class Dossier : public QWidget
         overview->addWidget(genre);
         overview->addWidget(new QLabel("作品简介"));
         overview->addWidget(synopsis, 1);
-        connect(btn("保存书籍资料", overview), &QPushButton::clicked, this, [=, this] {
-            safe([&] {
-                flush();
-                rename(title->text().trimmed());
-                notice->setText("书籍资料已保存");
-            });
-        });
+        connect(btn("保存书籍资料", overview), &QPushButton::clicked, this, &Dossier::saveNow);
         auto *personPage = section("人物档案");
         auto *columns = new QHBoxLayout;
         personPage->addLayout(columns);
@@ -241,19 +246,22 @@ class Dossier : public QWidget
                 people->setCurrentRow(-1);
                 loadPerson(-1);
                 name->setFocus();
-                notice->setText("填写姓名和属性后保存");
+                notice->setText("填写姓名后，人物资料会自动保存");
             });
         });
-        connect(btn("保存人物", form), &QPushButton::clicked, this, [this] {
-            safe([&] {
-                if (name->text().trimmed().isEmpty())
-                {
-                    notice->setText("请填写人物姓名");
-                    return;
-                }
-                flushPerson();
-                refreshList(selected);
-                notice->setText("人物资料已保存");
+        connect(btn("保存人物", form), &QPushButton::clicked, this, &Dossier::saveNow);
+        auto edited = [this] {
+            if (!loading)
+                notice->edited();
+        };
+        for (auto *field : {title, genre, name})
+            connect(field, &QLineEdit::textChanged, this, edited);
+        for (auto *field : {attrs, synopsis})
+            connect(field, &QPlainTextEdit::textChanged, this, edited);
+        connect(&notice->pending, &QTimer::timeout, this, [this] {
+            safe([this] {
+                flush();
+                notice->setText("已自动保存");
             });
         });
         connect(people, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -284,7 +292,8 @@ class Dossier : public QWidget
         line->addWidget(relation);
         relation->setPlaceholderText("关系，例如 师父");
         line->addWidget(to);
-        connect(btn("保存关系", line), &QPushButton::clicked, this, [this] {
+        saveRelation = btn("保存关系", line);
+        connect(saveRelation, &QPushButton::clicked, this, [this] {
             safe([&] {
                 if (!from->currentData().isValid() || from->currentData() == to->currentData() ||
                     relation->text().trimmed().isEmpty())
@@ -295,7 +304,7 @@ class Dossier : public QWidget
                 book->run("INSERT INTO relations(a,b,label) VALUES(?,?,?)",
                           {from->currentData(), to->currentData(), relation->text().trimmed()});
                 refreshPage(2);
-                notice->setText("关系已保存");
+                notice->confirm("人物关系");
             });
         });
         connect(btn("查看关系图", links), &QPushButton::clicked, this, [=, this] { safe(graph); });
@@ -339,6 +348,7 @@ class Dossier : public QWidget
     }
     void flush()
     {
+        notice->pending.stop();
         if (!book)
             return;
         if (details->currentIndex() >= 4)
@@ -351,7 +361,7 @@ class Dossier : public QWidget
             if (n.isEmpty())
                 throw std::runtime_error("请填写书名。");
             bool profileChanged = savedGenre != genre->text() || savedSynopsis != synopsis->toPlainText();
-            if (profileChanged || book->value("SELECT title FROM meta").toString() != n)
+            if (profileChanged || savedTitle != n)
             {
                 book->atomic([&] {
                     book->run("UPDATE meta SET title=?", {n});
@@ -360,13 +370,46 @@ class Dossier : public QWidget
                 });
                 savedGenre = genre->text();
                 savedSynopsis = synopsis->toPlainText();
+                if (savedTitle != n)
+                {
+                    savedTitle = n;
+                    renameBook(n);
+                }
             }
         }
+    }
+    void savePending()
+    {
+        const int page = details->currentIndex();
+        if (page >= 4)
+            notePages.at(page - 4)->savePending();
+        else if (notice->pending.isActive())
+            safe([this] {
+                flush();
+                notice->setText("已自动保存");
+            });
+    }
+    void saveNow()
+    {
+        const int page = details->currentIndex();
+        if (page >= 4)
+            notePages.at(page - 4)->saveNow();
+        else if (page == 2)
+            saveRelation->click();
+        else if (page == 0 || page == 1)
+            safe([&] {
+                if (page == 1 && name->text().trimmed().isEmpty())
+                    throw std::runtime_error("请填写人物姓名。");
+                flush();
+                notice->confirm(page == 0 ? "书籍资料" : "人物资料");
+            });
     }
     void enter(Book *source, int page = 0)
     {
         book = source;
-        selected = 0;
+        if (bookFile != source->filePath())
+            selected = 0;
+        bookFile = source->filePath();
         notice->clear();
         QSignalBlocker block(navigation);
         navigation->setCurrentRow(page);

@@ -15,7 +15,7 @@ class Window : public QMainWindow
     QStackedWidget *pages = new QStackedWidget;
     QWidget *shelf = new QWidget;
     InlineActions *shelfActions, *storageActions;
-    Dossier *dossier;
+    Dossier *dossier = nullptr;
     QWidget *writer = new QWidget, *storage = new QWidget;
     QLabel *location = new QLabel, *directoryMessage = new QLabel;
     QListWidget *recent = new QListWidget;
@@ -24,12 +24,11 @@ class Window : public QMainWindow
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
     QLabel *chapterPosition = new QLabel;
-    QLabel *status = new QLabel;
+    SaveStatus *status = new SaveStatus;
     QHBoxLayout *writerColumns;
     WriterSheet *sheet = nullptr;
     QTextCursor insertion;
     QString bookPath;
-    QTimer timer;
     QToolBar *tools;
     int chapter = 0;
     bool dirty = false;
@@ -136,12 +135,12 @@ class Window : public QMainWindow
             closeSheet();
         });
     }
-    void save()
+    void save(Book::SaveMode mode = Book::SaveMode::Automatic)
     {
         if (!dirty || !book || !chapter)
             return;
-        book->atomic([&] { book->save(chapter, editor->toPlainText()); });
-        timer.stop();
+        book->atomic([&] { book->save(chapter, editor->toPlainText(), mode); });
+        status->pending.stop();
         dirty = false;
         status->setText("已保存");
     }
@@ -191,7 +190,7 @@ class Window : public QMainWindow
     void showShelf()
     {
         save();
-        timer.stop();
+        status->pending.stop();
         chapter = 0;
         book.reset();
         lock.reset();
@@ -689,32 +688,72 @@ class Window : public QMainWindow
         }
         view->setMinimumHeight(240);
     }
+    void reviewHistoryCleanup()
+    {
+        const auto remove = book->historyCleanupCount();
+        beginSheet("整理全书旧历史");
+        auto *explanation =
+            new QLabel(QString("确认后，旧版历史也会计入全书上限。这次将永久移除 %1 份历史快照，各章当前正文会保留。")
+                           .arg(remove));
+        explanation->setWordWrap(true);
+        sheet->form->addWidget(explanation);
+        button(sheet->form, "返回历史版本", [this] { history(); });
+        button(sheet->form, "确认整理", [this, remove] {
+            book->includeLegacyInHistoryLimit(remove);
+            history();
+            sheet->report(QString("全书历史已整理，已移除 %1 份。").arg(remove));
+        });
+    }
     void history()
     {
         save();
         beginSheet("历史版本");
-        auto rows = book->run("SELECT id,datetime(stamp,'localtime') || '  ' || substr(body,1,28) FROM revisions WHERE "
+        auto rows = book->run("SELECT id,datetime(stamp,'localtime') FROM revisions WHERE "
                               "chapter=? ORDER BY id DESC",
                               {chapter});
-        auto *versions = sheet->choice("选择版本", std::move(rows));
+        auto *versions = new QListWidget;
+        versions->setObjectName("historyVersions");
+        versions->setAccessibleName("选择历史版本");
+        versions->setMaximumHeight(155);
+        versions->setWordWrap(true);
+        versions->setTextElideMode(Qt::ElideNone);
+        auto *summary = new QLabel(QString("每章最多 %1 份，全书共用 %2 份、%3 MiB 历史正文额度。优先保留近期版本。")
+                                       .arg(Book::chapterHistoryLimit)
+                                       .arg(Book::bookHistoryLimit)
+                                       .arg(Book::historyBudgetMiB));
+        summary->setWordWrap(true);
+        sheet->form->addWidget(summary);
+        if (book->value("SELECT 1 FROM revisions WHERE rolling=0 LIMIT 1").isValid())
+            button(sheet->form, "整理全书旧版历史…", [this] { reviewHistoryCleanup(); });
+        sheet->form->addWidget(versions);
+        while (rows.next())
+        {
+            auto *item =
+                new QListWidgetItem(rows.value(1).toString() + "   ·   #" + rows.value(0).toString(), versions);
+            item->setData(Qt::UserRole, rows.value(0));
+        }
         if (!versions->count())
         {
+            versions->hide();
             sheet->report("本章尚无历史版本。");
             return;
         }
         auto *preview = sheet->textArea("历史正文预览", true);
-        auto refresh = [=, this] {
-            guard([&] {
-                preview->setPlainText(
-                    book->value("SELECT body FROM revisions WHERE id=?", {versions->currentData()}).toString());
-            });
+        auto selectedBody = [this, versions] {
+            const auto *item = versions->currentItem();
+            if (!item)
+                throw std::runtime_error("请先选择历史版本。");
+            const auto text =
+                book->value("SELECT body FROM revisions WHERE id=? AND chapter=?", {item->data(Qt::UserRole), chapter});
+            if (!text.isValid())
+                throw std::runtime_error("找不到所选历史版本，请重新打开历史版本。");
+            return text.toString();
         };
-        connect(versions, &QComboBox::currentIndexChanged, sheet, refresh);
-        refresh();
+        connect(versions, &QListWidget::currentRowChanged, sheet,
+                [this, preview, selectedBody] { guard([&] { preview->setPlainText(selectedBody()); }); });
+        versions->setCurrentRow(0);
         button(sheet->form, "用此版本恢复本章", [=, this] {
-            auto text =
-                book->value("SELECT body FROM revisions WHERE id=? AND chapter=?", {versions->currentData(), chapter})
-                    .toString();
+            const auto text = selectedBody();
             book->atomic([&] { book->save(chapter, text); });
             closeSheet();
             loadChapter(chapter);
@@ -928,8 +967,8 @@ class Window : public QMainWindow
         saveChapter->setToolTip("立即保存当前章节（Ctrl+S）");
         chapterHeader->addWidget(saveChapter);
         auto saveNow = [this] {
-            save();
-            status->setText("已保存");
+            save(Book::SaveMode::Checkpoint);
+            status->confirm("当前章节");
         };
         connect(saveChapter, &QPushButton::clicked, this, [this, saveNow] { guard(saveNow); });
         connect(chapters, &QListWidget::itemDoubleClicked, this, [this] { guard([this] { renameChapter(); }); });
@@ -971,23 +1010,19 @@ class Window : public QMainWindow
         });
         connect(editor, &QPlainTextEdit::textChanged, this, [this] {
             dirty = true;
-            status->setText("等待自动保存…");
-            if (!timer.isActive())
-                timer.start(1800);
+            status->edited();
         });
-        timer.setSingleShot(true);
-        connect(&timer, &QTimer::timeout, this, [this] { guard([this] { save(); }); });
+        connect(&status->pending, &QTimer::timeout, this, [this] { guard([this] { save(); }); });
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
             if (state != Qt::ApplicationActive && dirty && pages->currentWidget() == writer)
                 guard([this] { save(); });
+            else if (state != Qt::ApplicationActive && pages->currentWidget() == dossier)
+                dossier->savePending();
         });
         connect(new QShortcut(QKeySequence::Save, this), &QShortcut::activated, this, [this, saveNow] {
             guard([this, saveNow] {
                 if (pages->currentWidget() == dossier)
-                {
-                    dossier->flush();
-                    setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
-                }
+                    dossier->saveNow();
                 else if (pages->currentWidget() == writer)
                     saveNow();
             });
