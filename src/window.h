@@ -203,7 +203,7 @@ class Window : public QMainWindow
         location->setText(QDir::toNativeSeparators(QSettings().value("booksDir", defaultBooksPath()).toString()));
         refreshCovers();
     }
-    static QString shelfTitle(const QString &path)
+    static QString shelfTitle(const QString &path, QByteArray *artwork = nullptr)
     {
         if (!QFileInfo(path).isFile())
             return {};
@@ -218,10 +218,98 @@ class Window : public QMainWindow
                 QSqlQuery q(db);
                 if (q.exec("SELECT title FROM meta WHERE format=1 LIMIT 1") && q.next())
                     title = q.value(0).toString();
+                if (artwork && db.tables().contains("book_cover") &&
+                    q.exec("SELECT image FROM book_cover WHERE id=1") && q.next())
+                    *artwork = q.value(0).toByteArray();
             }
         }
         QSqlDatabase::removeDatabase(connection);
         return title;
+    }
+    void changeCover(const QString &path)
+    {
+        QByteArray original;
+        const auto title = shelfTitle(path, &original);
+        if (title.isEmpty())
+            throw std::runtime_error("找不到书籍，请刷新书架。");
+        auto *form = shelfActions->begin("更换封面 · " + title);
+        auto *columns = new QHBoxLayout;
+        form->addLayout(columns, 1);
+        auto *picker =
+            new InlinePathPicker(PathUse::OpenFile, QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
+                                 {}, {}, {"*.png", "*.jpg", "*.jpeg", "*.bmp"});
+        columns->addWidget(picker, 1);
+        auto *side = new QVBoxLayout;
+        columns->addLayout(side);
+        auto *preview = new BookCover(title, path);
+        preview->setFixedSize(161, 209);
+        preview->useAsPreview();
+        QPixmap previous;
+        if (!original.isEmpty())
+            previous.loadFromData(original, "PNG");
+        preview->setArtwork(previous);
+        side->addWidget(preview);
+        auto *reset = new QPushButton("恢复默认封面");
+        side->addWidget(reset);
+        side->addStretch();
+        auto *hint = new QLabel("选择本地 PNG、JPG 或 BMP 图片。");
+        form->addWidget(hint);
+        auto *confirm = shelfActions->buttons("保存封面", [this, path, title, original, preview] {
+            QByteArray data;
+            if (!preview->coverImage().isNull())
+            {
+                QBuffer buffer(&data);
+                if (!buffer.open(QIODevice::WriteOnly) || !preview->coverImage().save(&buffer, "PNG"))
+                    throw std::runtime_error("图片转换失败，请重新选择。");
+            }
+            QLockFile editing(path + ".lock");
+            editing.setStaleLockTime(0);
+            if (!editing.tryLock())
+                throw std::runtime_error("书籍正在使用或目录无法写入，请关闭书籍后重试。");
+            QByteArray current;
+            if (shelfTitle(path, &current) != title || current != original)
+                throw std::runtime_error("书籍信息已变动，请返回书架重新选择。");
+            Book target(path);
+            target.atomic([&] {
+                target.run(
+                    "CREATE TABLE IF NOT EXISTS book_cover(id INTEGER PRIMARY KEY CHECK(id=1), image BLOB NOT NULL)");
+                if (data.isEmpty())
+                    target.run("DELETE FROM book_cover WHERE id=1");
+                else
+                    target.run("INSERT OR REPLACE INTO book_cover(id,image) VALUES(1,?)", {data});
+            });
+            refreshCovers();
+        });
+        confirm->setEnabled(false);
+        connect(picker->field(), &QLineEdit::textChanged, picker, [=] {
+            confirm->setEnabled(false);
+            preview->setArtwork(previous);
+            hint->setText("选择本地 PNG、JPG 或 BMP 图片。");
+            if (picker->path().isEmpty())
+                return;
+            QImageReader reader(picker->path());
+            reader.setAutoTransform(true);
+            auto size = reader.size();
+            if (size.isValid() && (size.width() > 960 || size.height() > 960))
+                reader.setScaledSize(size.scaled(960, 960, Qt::KeepAspectRatio).expandedTo(QSize(1, 1)));
+            auto image = reader.read();
+            if (image.isNull())
+            {
+                hint->setText("无法读取这张图片，请重新选择。");
+                return;
+            }
+            if (image.width() > 960 || image.height() > 960)
+                image = image.scaled(960, 960, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            preview->setArtwork(QPixmap::fromImage(image));
+            hint->setText("图片将随书籍保存。");
+            confirm->setEnabled(true);
+        });
+        connect(reset, &QPushButton::clicked, picker, [=] {
+            picker->field()->clear();
+            preview->setArtwork({});
+            hint->setText("已预览默认封面。");
+            confirm->setEnabled(!original.isEmpty());
+        });
     }
     void deleteFromShelf(const QString &path, const QString &title)
     {
@@ -275,13 +363,20 @@ class Window : public QMainWindow
             if (path.isEmpty() || seen.contains(path))
                 continue;
             seen.insert(path);
-            const auto title = shelfTitle(path);
+            QByteArray artwork;
+            const auto title = shelfTitle(path, &artwork);
             if (title.isEmpty())
                 continue;
             auto *item = new QListWidgetItem(title, recent);
             item->setData(Qt::UserRole, path);
             item->setSizeHint(QSize(161, 209));
             auto *cover = new BookCover(title, path);
+            if (!artwork.isEmpty())
+            {
+                QPixmap image;
+                image.loadFromData(artwork, "PNG");
+                cover->setArtwork(image);
+            }
             recent->setItemWidget(item, cover);
             connect(cover, &QPushButton::clicked, this, [this, path] { guard([&] { openBook(path); }); });
             auto *menu = cover->actionsMenu();
@@ -291,6 +386,7 @@ class Window : public QMainWindow
                         throw std::runtime_error("无法打开书籍所在目录。");
                 });
             });
+            menu->addAction("更换封面", this, [this, path] { guard([&] { changeCover(path); }); });
             menu->addAction("删除书籍", this, [this, path, title] { deleteFromShelf(path, title); });
         }
         shelfHeading->setText(recent->count() ? QString("我的书籍 · %1 本").arg(recent->count())

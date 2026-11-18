@@ -5,6 +5,7 @@ class BookCover : public QPushButton
 {
     QString title;
     QColor cloth;
+    QPixmap artwork;
     QToolButton *more = new QToolButton(this);
 
     void paintEvent(QPaintEvent *) override
@@ -23,14 +24,34 @@ class BookCover : public QPushButton
         p.setBrush(clothLight);
         p.setPen(underMouse() || hasFocus() ? QColor("#b7dec5") : cloth.lighter(145));
         p.drawRoundedRect(cover, 4, 4);
+        if (!artwork.isNull())
+        {
+            p.save();
+            QPainterPath outline;
+            outline.addRoundedRect(cover, 4, 4);
+            p.setClipPath(outline);
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            QSizeF crop = cover.size();
+            crop.scale(artwork.size(), Qt::KeepAspectRatio);
+            QRectF source(QPointF(), crop);
+            source.moveCenter(QRectF(artwork.rect()).center());
+            p.drawPixmap(cover, artwork, source);
+            QLinearGradient shade(cover.topLeft(), cover.bottomLeft());
+            shade.setColorAt(0, QColor(0, 0, 0, 65));
+            shade.setColorAt(0.35, QColor(0, 0, 0, 115));
+            shade.setColorAt(1, Qt::transparent);
+            p.fillRect(cover, shade);
+            p.restore();
+        }
         p.setPen(Qt::NoPen);
         p.fillRect(QRectF(cover.x() + 7, cover.y() + 1, 3, cover.height() - 2), QColor(0, 0, 0, 65));
         p.fillRect(QRectF(cover.x() + 10, cover.y() + 1, 1, cover.height() - 2), QColor(255, 255, 255, 42));
         p.setClipRect(cover.adjusted(12, 1, -1, -1));
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(QColor(207, 218, 172, 47), 1));
-        for (int radius = 28; radius <= 124; radius += 12)
-            p.drawEllipse(cover.bottomRight() + QPointF(-12, 24), radius, radius);
+        if (artwork.isNull())
+            for (int radius = 28; radius <= 124; radius += 12)
+                p.drawEllipse(cover.bottomRight() + QPointF(-12, 24), radius, radius);
         const QRectF area = cover.adjusted(23, 45, -15, -27);
         QFont face("Microsoft YaHei UI", 14, QFont::DemiBold);
         QTextLayout lines(title, face);
@@ -88,5 +109,20 @@ class BookCover : public QPushButton
         connect(more, &QToolButton::clicked, menu,
                 [this, menu] { menu->popup(more->mapToGlobal(QPoint(0, more->height()))); });
         return menu;
+    }
+    void setArtwork(const QPixmap &pixmap)
+    {
+        artwork = pixmap;
+        update();
+    }
+    const QPixmap &coverImage() const
+    {
+        return artwork;
+    }
+    void useAsPreview()
+    {
+        more->hide();
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
     }
 };

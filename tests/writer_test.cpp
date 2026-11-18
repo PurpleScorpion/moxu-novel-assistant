@@ -82,6 +82,47 @@ int main(int argc, char **argv)
     auto recent = std::find_if(lists.begin(), lists.end(), [](auto *w) { return w->isVisible(); });
     if (recent == lists.end())
         return 1;
+    auto coverFor = [&](const QString &bookPath) -> BookCover * {
+        for (int row = 0; row < (*recent)->count(); ++row)
+        {
+            auto *item = (*recent)->item(row);
+            if (QFileInfo(item->data(Qt::UserRole).toString()) == QFileInfo(bookPath))
+                return static_cast<BookCover *>((*recent)->itemWidget(item));
+        }
+        throw std::runtime_error("未找到封面");
+    };
+    auto editCover = [&] {
+        for (auto *action : coverFor(path)->findChild<QMenu *>()->actions())
+            if (action->text() == "更换封面")
+            {
+                action->trigger();
+                return;
+            }
+        throw std::runtime_error("未找到更换封面入口");
+    };
+    const auto picture = dir.filePath("本地封面.png");
+    QImage sample(320, 180, QImage::Format_RGB32);
+    sample.fill(QColor("#893b37"));
+    if (!sample.save(picture))
+        return 31;
+    editCover();
+    auto *imagePath = visibleControl<QLineEdit>(window, "filePath");
+    imagePath->setText(path);
+    if (visibleControl<QPushButton>(window, "primary")->isEnabled())
+        return 32;
+    imagePath->setText(picture);
+    if (!click("取消") || !coverFor(path)->coverImage().isNull())
+        return 33;
+    editCover();
+    visibleControl<QLineEdit>(window, "filePath")->setText(picture);
+    if (!click("保存封面") || !QFile::remove(picture))
+        return 34;
+    if (coverFor(path)->coverImage().toImage().pixelColor(10, 10) != QColor("#893b37") ||
+        !coverFor(dir.filePath("新书.moxu"))->coverImage().isNull())
+        return 35;
+    editCover();
+    if (!click("恢复默认封面") || !click("保存封面") || !coverFor(path)->coverImage().isNull())
+        return 36;
     auto books = (*recent)->findItems("测试书", Qt::MatchExactly);
     if (books.size() != 2)
         return 15;

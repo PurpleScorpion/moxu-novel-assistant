@@ -85,7 +85,8 @@ class InlinePathPicker : public QWidget
     QLineEdit *input = new QLineEdit;
 
   public:
-    InlinePathPicker(PathUse use, const QString &folder, const QString &extension = {}, const QString &filename = {})
+    InlinePathPicker(PathUse use, const QString &folder, const QString &extension = {}, const QString &filename = {},
+                     QStringList nameFilters = {})
         : use(use), extension(extension)
     {
         auto *layout = new QVBoxLayout(this);
@@ -96,8 +97,10 @@ class InlinePathPicker : public QWidget
             filters |= QDir::Files;
         model->setFilter(filters);
         if (!extension.isEmpty())
+            nameFilters.append("*" + extension);
+        if (!nameFilters.isEmpty())
         {
-            model->setNameFilters({"*" + extension});
+            model->setNameFilters(nameFilters);
             model->setNameFilterDisables(false);
         }
         model->setRootPath("");
