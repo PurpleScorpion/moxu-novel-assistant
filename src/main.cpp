@@ -10,11 +10,14 @@ int main(int argc, char **argv)
         app.installTranslator(&chinese);
     applyTheme(app);
     app.setApplicationName("Moxu");
+    app.setWindowIcon(QIcon(":/assets/moxu.png"));
     app.setOrganizationName("Moxu");
     Window window;
     window.show();
     if (app.arguments().contains("--startup-check"))
     {
+        if (window.windowIcon().pixmap(32).isNull())
+            return 8;
         if (!QSslSocket::supportsSsl())
             return 7;
         QDialogButtonBox controls(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);

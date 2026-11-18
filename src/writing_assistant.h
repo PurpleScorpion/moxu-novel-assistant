@@ -33,6 +33,7 @@ class WritingAssistant : public QWidget
         for (QWidget *control : QList<QWidget *>{service, model, key, config, test, task, context, sources, send})
             control->setEnabled(!busy);
         stop->setEnabled(busy);
+        stop->setVisible(busy);
     }
     const AiSite &site() const
     {
@@ -209,6 +210,7 @@ class WritingAssistant : public QWidget
             tabs->setCurrentWidget(result);
         }
         apply->setEnabled(false);
+        apply->hide();
         response = {};
         response.messagesApi = site().messagesApi();
         timedOut = false;
@@ -235,6 +237,7 @@ class WritingAssistant : public QWidget
             reply->deleteLater();
             setBusy(false);
             apply->setEnabled(canApply);
+            apply->setVisible(canApply);
             int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             if (timedOut || reply->error() == QNetworkReply::TimeoutError)
             {
@@ -316,6 +319,7 @@ class WritingAssistant : public QWidget
                 result->setPlainText(text);
             result->setReadOnly(false);
             apply->setEnabled(true);
+            apply->show();
             tabs->setCurrentWidget(result);
             status->setText("候选正文已就绪，可编辑后采纳。");
         });
@@ -336,29 +340,44 @@ class WritingAssistant : public QWidget
     {
         auto *stack = new QStackedLayout(this);
         auto *home = new QWidget;
+        home->setObjectName("writingWorkspace");
+        home->setStyleSheet(R"(
+            QWidget#writingWorkspace { background:#0b1511; }
+            QFrame#writingRail { background:#102019; border:1px solid #2b4737; border-radius:8px; }
+            QLabel#railHeading { color:#c8f0d2; font-weight:bold; font-size:16px; }
+            QLabel#mutedLabel { color:#9bb6a7; }
+            QFrame#railRule { background:#304638; }
+            QTreeWidget { background:transparent; border:none; padding:0; }
+            QTabWidget::pane { background:#12231b; border:1px solid #324b3c; border-radius:5px; }
+            QTabBar::tab { background:transparent; color:#a2b7aa; border-bottom:2px solid transparent; padding:9px 16px; }
+            QTabBar::tab:selected { color:#d5f9dd; background:#183223; border-bottom-color:#92ddaa; }
+            QPlainTextEdit { background:#0c1913; border:1px solid #34513e; border-radius:5px; padding:6px; }
+            QPlainTextEdit:focus { border-color:#80be92; }
+        )");
         stack->addWidget(home);
         auto *layout = new QVBoxLayout(home);
-        layout->setContentsMargins(22, 14, 22, 14);
+        layout->setContentsMargins(22, 16, 22, 16);
+        layout->setSpacing(14);
         auto *top = new QHBoxLayout;
         layout->addLayout(top);
         auto *heading = new QLabel("AI 写作");
         heading->setObjectName("title");
         top->addWidget(heading);
-        top->addStretch();
+        auto chapterTitle =
+            new QLabel(book.value("SELECT title FROM chapters WHERE id=?", {currentChapter}).toString());
+        chapterTitle->setTextFormat(Qt::PlainText);
+        chapterTitle->setObjectName("mutedLabel");
+        chapterTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        top->addSpacing(10);
+        top->addWidget(chapterTitle, 1);
+        top->addWidget(config);
         auto *close = new QPushButton("返回正文");
         top->addWidget(close);
-        auto *providerRow = new QHBoxLayout;
-        layout->addLayout(providerRow);
         service->setObjectName("aiService");
         model->setObjectName("aiModel");
-        providerRow->addWidget(new QLabel("服务"));
-        providerRow->addWidget(service);
-        providerRow->addWidget(new QLabel("模型"));
-        providerRow->addWidget(model, 1);
+        model->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        model->setMinimumContentsLength(10);
         key->setEchoMode(QLineEdit::Password);
-        providerRow->addWidget(key, 1);
-        providerRow->addWidget(test);
-        providerRow->addWidget(config);
         test->setToolTip("仅发送简短测试消息，可能产生少量 API 用量。");
         connect(config, &QPushButton::clicked, this, [this, stack, home] {
             const auto current = site().id;
@@ -374,18 +393,52 @@ class WritingAssistant : public QWidget
         });
         auto *panes = new QSplitter;
         layout->addWidget(panes, 1);
-        auto *library = new QWidget;
+        panes->setChildrenCollapsible(false);
+        panes->setHandleWidth(12);
+        auto *library = new QFrame;
+        library->setObjectName("writingRail");
+        library->setMinimumWidth(230);
         auto *left = new QVBoxLayout(library);
-        left->setContentsMargins(0, 0, 10, 0);
-        left->addWidget(new QLabel("写作规则与大纲（可选）"));
-        auto *help = new QLabel("勾选后随本次请求发送。Skill 约束写法，大纲提供剧情参考；可以都不选。");
+        left->setContentsMargins(16, 16, 16, 12);
+        left->setSpacing(8);
+        auto *settingsHeading = new QLabel("生成设置");
+        settingsHeading->setObjectName("railHeading");
+        left->addWidget(settingsHeading);
+        auto *fields = new QFormLayout;
+        fields->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        fields->addRow("服务", service);
+        fields->addRow("模型", model);
+        fields->addRow("密钥", key);
+        left->addLayout(fields);
+        left->addWidget(test);
+        left->addSpacing(6);
+        auto *rule = new QFrame;
+        rule->setObjectName("railRule");
+        rule->setFixedHeight(1);
+        left->addWidget(rule);
+        left->addSpacing(4);
+        auto *referenceHeader = new QHBoxLayout;
+        auto *refHeading = new QLabel("写作资料");
+        refHeading->setObjectName("railHeading");
+        referenceHeader->addWidget(refHeading);
+        referenceHeader->addStretch();
+        referenceCount->setObjectName("mutedLabel");
+        referenceHeader->addWidget(referenceCount);
+        left->addLayout(referenceHeader);
+        auto *help = new QLabel("勾选随本次请求发送的条目。");
+        help->setObjectName("mutedLabel");
         help->setWordWrap(true);
         left->addWidget(help);
         sources->setHeaderHidden(true);
         left->addWidget(sources, 1);
-        left->addWidget(referenceCount);
         panes->addWidget(library);
-        panes->addWidget(tabs);
+        auto *workspace = new QWidget;
+        auto *workLayout = new QVBoxLayout(workspace);
+        workLayout->setContentsMargins(0, 0, 0, 0);
+        workLayout->setSpacing(12);
+        workLayout->addWidget(tabs, 1);
+        panes->addWidget(workspace);
+        panes->setSizes({258, 790});
         panes->setStretchFactor(1, 1);
         QMap<int, QString> chapters;
         auto q = book.run("SELECT id,title FROM chapters");
@@ -413,10 +466,14 @@ class WritingAssistant : public QWidget
         }
         auto *compose = new QWidget;
         auto *inputs = new QVBoxLayout(compose);
+        inputs->setContentsMargins(18, 16, 18, 16);
+        inputs->setSpacing(8);
         inputs->addWidget(new QLabel("写作任务"));
         inputs->addWidget(task, 1);
         task->setPlainText(replacing ? "润色所选段落，保留原意和情节。" : "承接上下文，续写下一段。");
-        inputs->addWidget(new QLabel("正文上下文（可修改发送范围）"));
+        inputs->addSpacing(6);
+        inputs->addWidget(new QLabel("正文上下文"));
+        context->setPlaceholderText("输入需要参考的正文，或从编辑器选中一段文字后进入。");
         inputs->addWidget(context, 3);
         context->setPlainText(excerpt);
         tabs->addTab(compose, "写作要求");
@@ -424,17 +481,24 @@ class WritingAssistant : public QWidget
         tabs->addTab(result, "候选正文");
         preview->setReadOnly(true);
         result->setReadOnly(true);
+        context->setFont(QFont("Microsoft YaHei UI", 12));
+        result->setFont(context->font());
+        for (auto *field : {task, context, preview, result})
+            field->document()->setDocumentMargin(10);
         auto *actions = new QHBoxLayout;
-        layout->addLayout(actions);
+        workLayout->addLayout(actions);
         status->setTextFormat(Qt::PlainText);
         status->setWordWrap(true);
-        status->setText("「发送预览」可核对即将发送的规则、大纲和正文。");
+        status->setObjectName("mutedLabel");
+        status->setText("准备就绪");
         actions->addWidget(status, 1);
         actions->addWidget(stop);
         actions->addWidget(send);
         actions->addWidget(apply);
         stop->setEnabled(false);
+        stop->hide();
         apply->setEnabled(false);
+        apply->hide();
         send->setObjectName("primary");
         apply->setText(replacing ? "采纳并替换选区" : "采纳并插入光标处");
         reloadSites(QSettings().value("writing/provider", "deepseek").toString());
