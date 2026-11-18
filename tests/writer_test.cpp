@@ -1,3 +1,4 @@
+#include "dialog_watch.h"
 #include "window.h"
 #include <QTest>
 
@@ -5,7 +6,7 @@ int main(int argc, char **argv)
 {
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
-    DialogSizing dialogs;
+    DialogWatch dialogs;
     app.installEventFilter(&dialogs);
     applyTheme(app);
     QTemporaryDir dir;
@@ -23,6 +24,7 @@ int main(int argc, char **argv)
     Window window;
     window.show();
     auto click = [&](QString text) {
+        QApplication::processEvents();
         for (auto *b : window.findChildren<QPushButton *>())
             if (b->isVisible() && b->text() == text)
             {
@@ -35,28 +37,47 @@ int main(int argc, char **argv)
         return 7;
     if (!click("设置保存目录"))
         return 8;
-    QTimer::singleShot(50, [&] {
-        auto *dlg = qobject_cast<QFileDialog *>(app.activeModalWidget());
-        if (dlg)
-        {
-            dlg->setDirectory(dir.path());
-            dlg->selectFile(dir.path());
-            QMetaObject::invokeMethod(dlg, "accept");
-        }
-    });
-    if (!click("选择自定义目录…") || QDir(QSettings().value("booksDir").toString()) != QDir(dir.path()))
+    if (!click("选择自定义目录…"))
         return 9;
-    bool dialogSized = false;
-    QTimer::singleShot(100, [&] {
-        if (auto *dialog = qobject_cast<QInputDialog *>(app.activeModalWidget()))
-        {
-            dialogSized = dialog->width() >= 500 && dialog->height() >= 180;
-            dialog->setTextValue("新书");
-            dialog->accept();
-        }
-    });
-    if (!click("新建书籍") || !dialogSized || !QFileInfo::exists(dir.filePath("新书.moxu")) || !click("返回书架"))
+    auto *directory = visibleControl<QLineEdit>(window, "filePath");
+    directory->setText(path); // A file cannot be used as a directory.
+    if (!click("使用此目录") || !visibleControl<QLabel>(window, "actionError")->text().contains("目录"))
+        return 16;
+    directory->setText(dir.path());
+    if (!click("使用此目录") || QDir(QSettings().value("booksDir").toString()) != QDir(dir.path()))
+        return 9;
+    if (!click("新建书籍"))
         return 14;
+    auto *title = visibleControl<QLineEdit>(window, "newBookTitle");
+    title->setText("测试书");
+    if (!click("创建书籍") || !visibleControl<QLabel>(window, "actionError")->text().contains("同名") ||
+        title->text() != "测试书")
+        return 17;
+    auto *target = visibleControl<QLineEdit>(window, "filePath");
+    target->setText(dir.filePath("新书.moxu"));
+    if (!click("创建书籍") || !QFileInfo::exists(dir.filePath("新书.moxu")) || !click("返回书架"))
+        return 14;
+    {
+        Book old(path), copy(dir.filePath("新书.moxu"));
+        if (old.value("SELECT count(*) FROM chapters").toInt() != 2 ||
+            copy.value("SELECT title FROM meta").toString() != "测试书")
+            return 18;
+    }
+    if (!click("新建书籍"))
+        return 19;
+    visibleControl<QLineEdit>(window, "newBookTitle")->setText("未创建");
+    if (!click("取消") || QFileInfo::exists(dir.filePath("未创建.moxu")))
+        return 19;
+    if (!click("打开书籍…"))
+        return 20;
+    visibleControl<QLineEdit>(window, "filePath")->setText(dir.filePath("不存在.moxu"));
+    if (!click("打开书籍") || !visibleControl<QLabel>(window, "actionError")->text().contains("找不到"))
+        return 20;
+    auto *tree = visibleControl<QTreeView>(window);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    tree->setCurrentIndex(model->index(path));
+    if (!click("打开书籍") || !click("返回书架"))
+        return 21;
     auto lists = window.findChildren<QListWidget *>();
     auto recent = std::find_if(lists.begin(), lists.end(), [](auto *w) { return w->isVisible(); });
     if (recent == lists.end())
@@ -101,5 +122,5 @@ int main(int argc, char **argv)
     if (verify.value("SELECT body FROM chapters WHERE id=1").toString() != "林澈获得了300积分。" ||
         verify.value("SELECT body FROM chapters WHERE id=2").toString() != "买下丹药。")
         return 5;
-    return 0;
+    return dialogs.shown.isEmpty() ? 0 : 22;
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "inline_files.h"
 #include "skill_file.h"
 #include <QtWidgets>
 
@@ -6,6 +7,7 @@ class NoteEditor : public QWidget
 {
     NoteScope scope;
     Book *book = nullptr;
+    InlineActions *actions;
     QListWidget *entries = new QListWidget;
     QLineEdit *title = new QLineEdit;
     QPlainTextEdit *body = new QPlainTextEdit;
@@ -16,6 +18,13 @@ class NoteEditor : public QWidget
     QString displayedBody;
     QHash<qint64, WritingNote> records;
 
+    QString skillFolder() const
+    {
+        auto folder = QSettings().value("skillFolder").toString();
+        if (!folder.isEmpty() && QDir(folder).exists())
+            return folder;
+        return QSettings().value("booksDir", QDir::homePath()).toString();
+    }
     QString label(const WritingNote &note) const
     {
         if (scope != NoteScope::Outline)
@@ -77,7 +86,12 @@ class NoteEditor : public QWidget
     NoteEditor(NoteScope scope, std::function<void(NoteScope, qint64)> imported) : scope(scope)
     {
         const bool outline = scope == NoteScope::Outline;
-        auto *layout = new QVBoxLayout(this);
+        auto *home = new QWidget;
+        actions = new InlineActions(home);
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->addWidget(actions);
+        auto *layout = new QVBoxLayout(home);
         layout->setContentsMargins(0, 0, 0, 0);
         auto *hint = new QLabel(outline ? "按全书或章节整理剧情。AI 写作时可选择要参考的条目。"
                                 : scope == NoteScope::Global
@@ -102,38 +116,47 @@ class NoteEditor : public QWidget
             connect(title, &QLineEdit::textChanged, share,
                     [share](const QString &name) { share->setEnabled(!name.trimmed().isEmpty()); });
             connect(loadFile, &QPushButton::clicked, this, [this, imported] {
-                attempt([&] {
-                    QFileDialog dialog(this, "导入 SKILL.md", {}, "Markdown 文件 (*.md)");
-                    dialog.setOption(QFileDialog::DontUseNativeDialog);
-                    dialog.setFileMode(QFileDialog::ExistingFile);
-                    auto *destination = new QComboBox(&dialog);
-                    destination->setObjectName("importScope");
-                    destination->addItems({scopeName(NoteScope::Global), scopeName(NoteScope::Book)});
-                    destination->setCurrentIndex(this->scope == NoteScope::Global ? 0 : 1);
-                    auto *grid = qobject_cast<QGridLayout *>(dialog.layout());
-                    int row = grid->rowCount();
-                    grid->addWidget(new QLabel("导入到", &dialog), row, 0);
-                    grid->addWidget(destination, row, 1);
-                    if (dialog.exec() != QDialog::Accepted)
-                        return;
-                    auto note = readSkillFile(dialog.selectedFiles().first());
+                auto *fields = actions->begin("导入 SKILL.md");
+                auto *picker = new InlinePathPicker(PathUse::OpenFile, skillFolder(), ".md");
+                fields->addWidget(picker, 1);
+                auto *destination = new QComboBox;
+                destination->setObjectName("importScope");
+                destination->addItems({scopeName(NoteScope::Global), scopeName(NoteScope::Book)});
+                destination->setCurrentIndex(this->scope == NoteScope::Global ? 0 : 1);
+                fields->addWidget(new QLabel("导入到"));
+                fields->addWidget(destination);
+                actions->buttons("确认导入", [this, picker, destination, imported] {
+                    auto path = picker->checkedPath();
+                    auto note = readSkillFile(path);
                     flush();
                     auto target = destination->currentIndex() == 0 ? NoteScope::Global : NoteScope::Book;
                     auto record = WritingNotes(*book, target).save(note);
+                    QSettings().setValue("skillFolder", QFileInfo(path).absolutePath());
                     imported(target, record.id);
                 });
             });
             connect(share, &QPushButton::clicked, this, [this] {
-                attempt([&] {
-                    QFileDialog dialog(this, "导出 SKILL.md", {}, "Markdown 文件 (*.md)");
-                    dialog.setAcceptMode(QFileDialog::AcceptSave);
-                    dialog.setDefaultSuffix("md");
-                    dialog.selectFile("SKILL.md");
-                    if (dialog.exec() != QDialog::Accepted)
-                        return;
-                    auto path = dialog.selectedFiles().first();
+                auto *fields = actions->begin("导出 Skill · " + title->text());
+                auto *picker = new InlinePathPicker(PathUse::SaveFile, skillFolder(), ".md", "SKILL.md");
+                fields->addWidget(picker, 1);
+                auto *replace = new QCheckBox("覆盖该路径的已有文件");
+                fields->addWidget(replace);
+                auto refresh = [picker, replace] {
+                    replace->setChecked(false);
+                    replace->setVisible(QFileInfo(picker->path()).isFile());
+                };
+                connect(picker->field(), &QLineEdit::textChanged, replace, refresh);
+                refresh();
+                actions->buttons("确认导出", [this, picker, replace] {
+                    auto path = picker->checkedPath();
+                    if (QFileInfo::exists(path) && !replace->isChecked())
+                    {
+                        replace->show();
+                        throw std::runtime_error("目标文件已存在，请更改保存路径或勾选覆盖。");
+                    }
                     flush();
-                    writeSkillFile(path, saved);
+                    writeSkillFile(path, saved, replace->isChecked());
+                    QSettings().setValue("skillFolder", QFileInfo(path).absolutePath());
                     status->setText("已导出到 " + QDir::toNativeSeparators(path));
                 });
             });
@@ -189,13 +212,17 @@ class NoteEditor : public QWidget
             });
         });
         connect(removeButton, &QPushButton::clicked, this, [this] {
-            if (QMessageBox::question(this, "删除条目", "确定删除「" + saved.title + "」？",
-                                      QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
-                attempt([&] {
-                    WritingNotes(*book, this->scope).remove(saved);
-                    reload(0);
-                    status->setText("已删除");
-                });
+            auto *fields = actions->begin("删除" + scopeName(this->scope) + "条目");
+            auto *prompt = new QLabel("确定删除「" + saved.title + "」？");
+            prompt->setTextFormat(Qt::PlainText);
+            prompt->setWordWrap(true);
+            fields->addWidget(prompt);
+            fields->addStretch();
+            actions->buttons("确认删除", [this, record = saved] {
+                WritingNotes(*book, this->scope).remove(record);
+                reload(0);
+                status->setText("已删除");
+            });
         });
         connect(entries, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *current) {
             if (!current)
@@ -214,6 +241,7 @@ class NoteEditor : public QWidget
     }
     void enter(Book *source)
     {
+        actions->finish();
         book = source;
         chapters->clear();
         chapters->addItem("全书", 0);

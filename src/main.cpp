@@ -8,8 +8,6 @@ int main(int argc, char **argv)
     QTranslator chinese;
     if (chinese.load(":/lang/qtbase_zh_CN.qm"))
         app.installTranslator(&chinese);
-    DialogSizing dialogs;
-    app.installEventFilter(&dialogs);
     applyTheme(app);
     app.setApplicationName("Moxu");
     app.setOrganizationName("Moxu");

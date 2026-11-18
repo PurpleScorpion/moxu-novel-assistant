@@ -1,4 +1,5 @@
 #include "window.h"
+#include "dialog_watch.h"
 #include <QTest>
 
 namespace
@@ -8,21 +9,6 @@ void check(bool ok, const char *message)
     if (!ok)
         throw std::runtime_error(message);
 }
-class DialogWatch : public QObject
-{
-  public:
-    QStringList shown;
-    bool eventFilter(QObject *object, QEvent *event) override
-    {
-        if (event->type() == QEvent::Show)
-            if (auto *dialog = qobject_cast<QDialog *>(object))
-            {
-                shown.append(dialog->windowTitle());
-                QTimer::singleShot(0, dialog, &QDialog::reject);
-            }
-        return false;
-    }
-};
 template <class T> QList<T *> visible(QWidget &parent)
 {
     QList<T *> result;

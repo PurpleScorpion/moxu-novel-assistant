@@ -102,7 +102,7 @@ WritingNote readSkillFile(const QString &path)
     return note;
 }
 
-void writeSkillFile(const QString &path, const WritingNote &note)
+void writeSkillFile(const QString &path, const WritingNote &note, bool overwrite)
 {
     if (!path.endsWith(".md", Qt::CaseInsensitive))
         throw std::runtime_error("请将 Skill 保存为 .md 文件。");
@@ -110,6 +110,16 @@ void writeSkillFile(const QString &path, const WritingNote &note)
     if (!header.endsWith('\n'))
         header += '\n';
     const auto bytes = ("---\n" + header + "---\n" + note.body).toUtf8();
+    if (!overwrite)
+    {
+        QTemporaryFile pending(QFileInfo(path).dir().filePath(".moxu-skill-XXXXXX"));
+        if (!pending.open() || pending.write(bytes) != bytes.size() || !pending.flush())
+            throw std::runtime_error("写入 Skill 文件失败，请检查目标位置是否可写。");
+        if (!pending.rename(path))
+            throw std::runtime_error("无法创建目标文件，请检查文件名或确认覆盖已有文件。");
+        pending.setAutoRemove(false);
+        return;
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
         throw std::runtime_error("写入 Skill 文件失败，请检查目标位置是否可写。");

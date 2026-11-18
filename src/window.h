@@ -13,6 +13,7 @@ class Window : public QMainWindow
     std::unique_ptr<QLockFile> lock;
     QStackedWidget *pages = new QStackedWidget;
     QWidget *shelf = new QWidget;
+    InlineActions *shelfActions, *storageActions;
     Dossier *dossier;
     QWidget *writer = new QWidget, *storage = new QWidget;
     QLabel *location = new QLabel, *directoryMessage = new QLabel;
@@ -94,6 +95,8 @@ class Window : public QMainWindow
             const QString error = QString::fromUtf8(e.what());
             if (sheet)
                 sheet->report(error);
+            else if (pages->currentWidget() == storage)
+                directoryMessage->setText(error);
             else
             {
                 statusBar()->show();
@@ -111,10 +114,6 @@ class Window : public QMainWindow
     void tool(const QString &title, Action action)
     {
         connect(tools->addAction(title), &QAction::triggered, this, [this, action] { guard(action); });
-    }
-    QString ask(const QString &label, const QString &initial = {})
-    {
-        return QInputDialog::getText(this, "墨序", label, QLineEdit::Normal, initial).trimmed();
     }
     QComboBox *personChoice()
     {
@@ -167,6 +166,7 @@ class Window : public QMainWindow
         chapter = 0;
         book.reset();
         lock.reset();
+        shelfActions->finish();
         pages->setCurrentWidget(shelf);
         tools->hide();
         statusBar()->hide();
@@ -209,16 +209,42 @@ class Window : public QMainWindow
     }
     void newBook()
     {
-        auto name = ask("书名");
-        if (name.isEmpty())
-            return;
-        QString filename = name;
-        filename.replace(QRegularExpression(R"rx([<>:"/\\|?*\x00-\x1f])rx"), "_");
-        auto dir = QDir(QSettings().value("booksDir", defaultBooksPath()).toString());
-        auto path = dir.filePath(filename + ".moxu");
-        if (QFileInfo::exists(path))
-            path = QFileDialog::getSaveFileName(this, "书籍已存在，请另选文件名", path, "墨序书籍 (*.moxu)");
-        openBook(path, name);
+        QString folder = QSettings().value("booksDir", defaultBooksPath()).toString();
+        auto *fields = shelfActions->begin("新建书籍");
+        auto *title = new QLineEdit;
+        title->setObjectName("newBookTitle");
+        fields->addWidget(new QLabel("书名"));
+        fields->addWidget(title);
+        auto *picker = new InlinePathPicker(PathUse::SaveFile, folder, ".moxu", "新书.moxu");
+        fields->addWidget(picker, 1);
+        connect(title, &QLineEdit::textChanged, picker,
+                [picker, previous = QString("新书.moxu")](const QString &text) mutable {
+                    auto current = QFileInfo(picker->path());
+                    auto name = text.trimmed();
+                    name.replace(QRegularExpression(R"rx([<>:"/\\|?*\x00-\x1f])rx"), "_");
+                    auto filename = (name.isEmpty() ? QString("新书") : name) + ".moxu";
+                    if (current.fileName() == previous)
+                        picker->setPath(current.dir().filePath(filename));
+                    previous = filename;
+                });
+        shelfActions->buttons("创建书籍", [this, title, picker] {
+            auto name = title->text().trimmed();
+            if (name.isEmpty())
+                throw std::runtime_error("请填写书名。");
+            auto path = picker->checkedPath();
+            if (QFileInfo::exists(path))
+                throw std::runtime_error("已有同名文件。可以保留书名，在保存路径中修改文件名或选择其他目录。");
+            openBook(path, name);
+        });
+        title->setFocus();
+    }
+    void browseBooks()
+    {
+        auto *fields = shelfActions->begin("打开已有书籍");
+        auto *picker = new InlinePathPicker(PathUse::OpenFile,
+                                            QSettings().value("booksDir", defaultBooksPath()).toString(), ".moxu");
+        fields->addWidget(picker, 1);
+        shelfActions->buttons("打开书籍", [this, picker] { openBook(picker->checkedPath()); });
     }
     void enterDossier(int page = 0)
     {
@@ -236,28 +262,20 @@ class Window : public QMainWindow
             return;
         path = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
         if (!QDir().mkpath(path))
-        {
-            directoryMessage->setText("无法创建书籍目录，请选择有写入权限的位置。");
-            return;
-        }
+            throw std::runtime_error("无法创建书籍目录，请选择有写入权限的位置。");
         QTemporaryFile probe(QDir(path).filePath(".moxu-write-XXXXXX"));
         if (!probe.open())
-        {
-            directoryMessage->setText("该目录无法写入，请选择其他目录。");
-            return;
-        }
+            throw std::runtime_error("该目录无法写入，请选择其他目录。");
         QSettings settings;
         settings.setValue("booksDir", path);
         settings.sync();
         if (settings.status() != QSettings::NoError)
-        {
-            directoryMessage->setText("保存目录设置失败");
-            return;
-        }
+            throw std::runtime_error("保存目录设置失败");
         showShelf();
     }
     void chooseStorage()
     {
+        storageActions->finish();
         pages->setCurrentWidget(storage);
         tools->hide();
         directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
@@ -525,40 +543,23 @@ class Window : public QMainWindow
     void fileOutput(bool backup)
     {
         beginSheet(backup ? "备份整本书" : "导出全书 TXT");
-        auto *model = new QFileSystemModel(sheet);
-        model->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Drives);
-        model->setRootPath("");
-        auto *dirs = new QTreeView;
-        dirs->setModel(model);
-        dirs->setHeaderHidden(true);
-        for (int c = 1; c < model->columnCount(); ++c)
-            dirs->hideColumn(c);
-        sheet->form->addWidget(new QLabel("目标目录"));
-        sheet->form->addWidget(dirs, 1);
         QFileInfo source(bookPath);
-        auto index = model->index(source.absolutePath());
-        dirs->setCurrentIndex(index);
-        dirs->scrollTo(index);
         auto filename = source.completeBaseName() +
                         (backup ? QDateTime::currentDateTime().toString("-yyyyMMdd-HHmmss") + ".moxu" : ".txt");
-        auto *path = sheet->field("保存路径", QDir::toNativeSeparators(source.dir().filePath(filename)));
-        connect(dirs, &QTreeView::clicked, sheet, [=](const QModelIndex &index) {
-            auto name = QFileInfo(path->text()).fileName();
-            path->setText(
-                QDir::toNativeSeparators(QDir(model->filePath(index)).filePath(name.isEmpty() ? filename : name)));
-        });
+        auto *picker =
+            new InlinePathPicker(PathUse::SaveFile, source.absolutePath(), backup ? ".moxu" : ".txt", filename);
+        sheet->form->addWidget(picker, 1);
+        auto *path = picker->field();
         auto *overwrite = new QCheckBox("覆盖此路径已有的 TXT 文件");
         sheet->form->addWidget(overwrite);
         auto refresh = [=] {
             overwrite->setChecked(false);
-            overwrite->setVisible(!backup && QFileInfo::exists(path->text()));
+            overwrite->setVisible(!backup && QFileInfo::exists(picker->path()));
         };
         connect(path, &QLineEdit::textChanged, sheet, refresh);
         refresh();
         button(sheet->form, backup ? "保存备份" : "导出文本", [=, this] {
-            auto target = QDir::fromNativeSeparators(path->text());
-            if (!QDir::isAbsolutePath(target))
-                throw std::runtime_error("请填写完整的保存路径。");
+            auto target = picker->checkedPath();
             save();
             if (backup)
             {
@@ -603,19 +604,26 @@ class Window : public QMainWindow
         intro->setContentsMargins(70, 45, 70, 45);
         intro->addWidget(new MatrixBanner("墨序 · 书架"));
         intro->addSpacing(18);
-        intro->addWidget(new QLabel("最近书籍"));
-        intro->addWidget(recent);
-        intro->addWidget(location);
+        auto *shelfHome = new QWidget;
+        shelfActions = new InlineActions(shelfHome);
+        intro->addWidget(shelfActions, 1);
+        auto *library = new QVBoxLayout(shelfHome);
+        library->addWidget(new QLabel("最近书籍"));
+        library->addWidget(recent);
+        library->addWidget(location);
         location->setObjectName("hint");
         auto *actions = new QHBoxLayout;
-        intro->addLayout(actions);
+        library->addLayout(actions);
         button(actions, "新建书籍", [this] { newBook(); });
-        button(actions, "打开书籍…",
-               [this] { openBook(QFileDialog::getOpenFileName(this, "打开书籍", {}, "墨序书籍 (*.moxu)")); });
+        button(actions, "打开书籍…", [this] { browseBooks(); });
         button(actions, "设置保存目录", [this] { chooseStorage(); });
         connect(recent, &QListWidget::itemActivated, this, [this](auto *i) { guard([&] { openBook(i->text()); }); });
         pages->addWidget(storage);
-        auto *setup = new QVBoxLayout(storage);
+        auto *storageHome = new QWidget;
+        storageActions = new InlineActions(storageHome);
+        auto *storageLayout = new QVBoxLayout(storage);
+        storageLayout->addWidget(storageActions);
+        auto *setup = new QVBoxLayout(storageHome);
         setup->setContentsMargins(60, 40, 60, 40);
         setup->setSpacing(18);
         setup->addStretch();
@@ -628,9 +636,11 @@ class Window : public QMainWindow
         setup->addLayout(choices);
         button(choices, "使用默认目录", [this] { setDirectory(defaultBooksPath()); });
         button(choices, "选择自定义目录…", [this] {
-            setDirectory(QFileDialog::getExistingDirectory(
-                this, "选择小说保存目录",
-                QSettings().value("booksDir", QCoreApplication::applicationDirPath()).toString()));
+            auto *fields = storageActions->begin("自定义小说保存目录");
+            auto *picker =
+                new InlinePathPicker(PathUse::Directory, QSettings().value("booksDir", defaultBooksPath()).toString());
+            fields->addWidget(picker, 1);
+            storageActions->buttons("使用此目录", [this, picker] { setDirectory(picker->checkedPath()); });
         });
         button(choices, "返回书架", [this] {
             if (!QSettings().contains("booksDir"))

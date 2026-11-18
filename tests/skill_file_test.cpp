@@ -1,3 +1,4 @@
+#include "dialog_watch.h"
 #include "dossier.h"
 
 namespace
@@ -12,49 +13,24 @@ void put(const QString &path, const QByteArray &data)
     QFile file(path);
     check(file.open(QIODevice::WriteOnly) && file.write(data) == data.size(), "无法建立测试文件");
 }
+void click(QWidget &page, const QString &text)
+{
+    QApplication::processEvents();
+    for (auto *button : page.findChildren<QPushButton *>())
+        if (button->isVisible() && button->text() == text)
+        {
+            button->click();
+            return;
+        }
+    throw std::runtime_error(("未找到按钮 " + text).toStdString());
+}
 void fileAction(QWidget &page, QString button, QString path, int scope = -1, bool cancel = false)
 {
-    bool found = false;
-    QTimer::singleShot(80, &page, [&] {
-        auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
-        if (!dialog)
-            return;
-        auto *target = dialog->findChild<QComboBox *>("importScope");
-        found = scope < 0 || (target && target->isVisible());
-        if (cancel || !found)
-        {
-            dialog->reject();
-            return;
-        }
-        if (scope >= 0)
-            target->setCurrentIndex(scope);
-        auto *name = dialog->findChild<QLineEdit *>("fileNameEdit");
-        if (!name)
-        {
-            found = false;
-            dialog->reject();
-            return;
-        }
-        name->setText(QDir::toNativeSeparators(path));
-        QTimer::singleShot(3500, dialog, [&, dialog] {
-            qCritical() << "文件选择未完成" << button << dialog->selectedFiles();
-            found = false;
-            if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
-                modal->reject();
-            dialog->reject();
-        });
-        QMetaObject::invokeMethod(dialog, "accept");
-    });
-    for (auto *b : page.findChildren<QPushButton *>())
-    {
-        if (b->isVisible() && b->text() == button)
-        {
-            b->click();
-            check(found, "未打开文件或范围选择器");
-            return;
-        }
-    }
-    throw std::runtime_error("未找到导入导出入口");
+    click(page, button);
+    visibleControl<QLineEdit>(page, "filePath")->setText(path);
+    if (scope >= 0)
+        visibleControl<QComboBox>(page, "importScope")->setCurrentIndex(scope);
+    click(page, cancel ? "取消" : scope >= 0 ? "确认导入" : "确认导出");
 }
 } // namespace
 
@@ -62,7 +38,14 @@ int main(int argc, char **argv)
 {
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
+    DialogWatch watch;
+    app.installEventFilter(&watch);
     QTemporaryDir dir;
+    app.setOrganizationName("MoxuTests");
+    app.setApplicationName("SkillFiles");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.path());
+    QSettings().setValue("booksDir", dir.path());
     try
     {
         auto db = QSqlDatabase::addDatabase("QSQLITE", "moxu-personal-writing-library");
@@ -111,6 +94,28 @@ int main(int argc, char **argv)
               "外部 Skill 正文或元数据有误");
         auto copy = dir.filePath("分享.md");
         fileAction(page, "导出 SKILL.md…", copy);
+        put(copy, "保留原文件");
+        fileAction(page, "导出 SKILL.md…", copy);
+        {
+            QFile kept(copy);
+            kept.open(QIODevice::ReadOnly);
+            check(kept.readAll() == "保留原文件", "原 Skill 被静默覆盖");
+        }
+        auto *destination = visibleControl<QLineEdit>(page, "filePath");
+        auto *replace = visibleControl<QCheckBox>(page);
+        replace->setChecked(true);
+        destination->setText(shared);
+        check(!replace->isChecked(), "修改路径没有重置覆盖许可");
+        destination->setText(copy);
+        click(page, "取消");
+        {
+            QFile kept(copy);
+            kept.open(QIODevice::ReadOnly);
+            check(kept.readAll() == "保留原文件", "取消覆盖写入了文件");
+        }
+        fileAction(page, "导出 SKILL.md…", copy);
+        visibleControl<QCheckBox>(page)->setChecked(true);
+        click(page, "确认导出");
         auto exported = readSkillFile(copy);
         check(exported.title == "dialogue" && exported.skillHeader == header && exported.body == instructions,
               "外部文件再次导出丢失内容");
@@ -121,6 +126,16 @@ int main(int argc, char **argv)
         check(WritingNotes(book, NoteScope::Book).list().size() == 3, "无效文件产生了条目");
         put(external, "# 自定义标题\n\n正文");
         check(readSkillFile(external).title == "自定义标题", "普通 Markdown 标题识别失败");
+        check(!visibleControl<QLabel>(page, "actionError")->text().isEmpty(), "无效文件缺少页内提示");
+        click(page, "确认导入"); // Retry the repaired file on the same form.
+        check(WritingNotes(book, NoteScope::Book).list().size() == 4, "修正文件后导入失败");
+        click(page, "删除");
+        click(page, "取消");
+        check(WritingNotes(book, NoteScope::Book).list().size() == 4, "取消后条目被删除");
+        click(page, "删除");
+        click(page, "确认删除");
+        check(WritingNotes(book, NoteScope::Book).list().size() == 3, "页内删除失败");
+        check(watch.shown.isEmpty(), "资料操作中弹出了对话框");
         Book other(dir.filePath("乙.moxu"), "乙");
         check(WritingNotes(other, NoteScope::Global).list().size() == 1 &&
                   WritingNotes(other, NoteScope::Book).list().isEmpty(),
@@ -128,7 +143,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &e)
     {
-        qCritical("%s", e.what());
+        fprintf(stderr, "%s\n", e.what());
         return 1;
     }
     QSqlDatabase::removeDatabase("moxu-personal-writing-library");

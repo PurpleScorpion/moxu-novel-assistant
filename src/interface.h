@@ -78,25 +78,6 @@ class MatrixBanner : public QWidget
     }
 };
 
-class DialogSizing : public QObject
-{
-    bool eventFilter(QObject *o, QEvent *event) override
-    {
-        auto *dlg = qobject_cast<QDialog *>(o);
-        if (dlg && event->type() == QEvent::Show)
-        {
-            const auto bounds = dlg->screen()->availableGeometry().size();
-            int w = qMin(580, bounds.width() - 32), h = qMin(200, bounds.height() - 48);
-            if (auto *layout = dlg->layout())
-                layout->setSizeConstraint(QLayout::SetDefaultConstraint);
-            dlg->setMinimumSize(dlg->minimumSize().expandedTo(QSize(w, h)).boundedTo(bounds));
-            dlg->resize(dlg->size().expandedTo(dlg->minimumSize()));
-            if (auto *label = dlg->findChild<QLabel *>("qt_msgbox_label"))
-                label->setMinimumWidth(qMax(180, w - 140));
-        }
-        return false;
-    }
-};
 
 inline QString defaultBooksPath()
 {
