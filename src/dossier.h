@@ -1,6 +1,7 @@
 #pragma once
 #include "book.h"
 #include "interface.h"
+#include "note_editor.h"
 #include <functional>
 
 class Dossier : public QWidget
@@ -19,6 +20,7 @@ class Dossier : public QWidget
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
     int selected = 0;
+    QList<NoteEditor *> notePages;
     QString oldName, oldAttrs;
     static QPushButton *btn(QString text, QBoxLayout *layout)
     {
@@ -144,7 +146,7 @@ class Dossier : public QWidget
                 edges->addItem(q.value(0).toString() + "   ── " + q.value(1).toString() + " ─→   " +
                                q.value(2).toString());
         }
-        else
+        else if (page == 3)
         {
             ledger->setRowCount(0);
             auto q = book->run("SELECT c.title,p.name,e.description,resource,delta,SUM(delta) OVER(PARTITION BY "
@@ -158,6 +160,8 @@ class Dossier : public QWidget
                     ledger->setItem(row, i, new QTableWidgetItem(q.value(i).toString()));
             }
         }
+        else
+            notePages.at(page - 4)->enter(book);
     }
 
   public:
@@ -176,6 +180,8 @@ class Dossier : public QWidget
         side->addWidget(new MatrixBanner("墨序"));
         navigation->setObjectName("navigation");
         navigation->addItems({"书籍概览", "人物档案", "人物关系", "事件账本"});
+        for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
+            navigation->addItem(scopeName(scope));
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
@@ -300,6 +306,12 @@ class Dossier : public QWidget
         ledger->setEditTriggers(QAbstractItemView::NoEditTriggers);
         ledger->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
         ledger->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+        for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
+        {
+            auto *editor = new NoteEditor(scope);
+            notePages.append(editor);
+            section(scopeName(scope))->addWidget(editor);
+        }
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;
@@ -308,6 +320,7 @@ class Dossier : public QWidget
                 try
                 {
                     flush();
+                    refreshPage(page);
                 }
                 catch (...)
                 {
@@ -316,7 +329,6 @@ class Dossier : public QWidget
                     throw;
                 }
                 details->setCurrentIndex(page);
-                refreshPage(page);
                 notice->clear();
             });
         });
@@ -325,6 +337,8 @@ class Dossier : public QWidget
     {
         if (!book)
             return;
+        if (details->currentIndex() >= 4)
+            notePages.at(details->currentIndex() - 4)->flush();
         if (details->currentIndex() == 1)
             flushPerson();
         if (details->currentIndex() == 0)

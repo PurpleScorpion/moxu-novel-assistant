@@ -17,6 +17,8 @@ int main(int argc, char **argv)
     window.show();
     if (app.arguments().contains("--startup-check"))
     {
+        if (!QSslSocket::supportsSsl())
+            return 7;
         QDialogButtonBox controls(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         if (!controls.button(QDialogButtonBox::Cancel)->text().contains("取消"))
             return 6;

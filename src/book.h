@@ -3,6 +3,8 @@
 #include <functional>
 #include <stdexcept>
 
+QSqlQuery executeSql(const QSqlDatabase &db, const QString &sql, const QVariantList &args = {});
+
 class Book
 {
     QString connection;

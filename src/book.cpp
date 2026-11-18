@@ -7,7 +7,7 @@ void fail(const QString &message)
     throw std::runtime_error(message.toStdString());
 }
 } // namespace
-QSqlQuery Book::run(const QString &sql, const QVariantList &args) const
+QSqlQuery executeSql(const QSqlDatabase &db, const QString &sql, const QVariantList &args)
 {
     QSqlQuery q(db);
     if (!q.prepare(sql))
@@ -17,6 +17,10 @@ QSqlQuery Book::run(const QString &sql, const QVariantList &args) const
     if (!q.exec())
         fail(q.lastError().text());
     return q;
+}
+QSqlQuery Book::run(const QString &sql, const QVariantList &args) const
+{
+    return executeSql(db, sql, args);
 }
 QVariant Book::value(const QString &sql, const QVariantList &args) const
 {
@@ -85,6 +89,10 @@ Book::Book(const QString &path, const QString &newTitle)
                     "NULL,synopsis TEXT NOT NULL)");
                 run("INSERT OR IGNORE INTO book_profile VALUES(1,'','')");
             });
+        if (!value("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writing_notes'").isValid())
+            run("CREATE TABLE writing_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN "
+                "('skill','outline')), title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER REFERENCES chapters, "
+                "revision INTEGER NOT NULL DEFAULT 1)");
     }
     catch (...)
     {

@@ -1,5 +1,6 @@
 #pragma once
 #include "dossier.h"
+#include "writing_assistant.h"
 #include <QtWidgets>
 #include <cmath>
 #include <memory>
@@ -23,6 +24,36 @@ class Window : public QMainWindow
     QToolBar *tools;
     int chapter = 0;
     bool dirty = false;
+    QHash<QString, QString> sessionKeys;
+
+    void aiWriting()
+    {
+        save();
+        auto target = editor->textCursor();
+        QString excerpt =
+            target.hasSelection() ? target.selectedText() : editor->toPlainText().left(target.position()).right(3000);
+        excerpt.replace(QChar::ParagraphSeparator, '\n');
+        auto back = [this] {
+            auto *panel = pages->currentWidget();
+            pages->setCurrentWidget(writer);
+            pages->removeWidget(panel);
+            panel->deleteLater();
+            tools->show();
+            statusBar()->show();
+            editor->setFocus();
+        };
+        auto accept = [this, target, back](const QString &text) mutable {
+            target.insertText(text);
+            editor->setTextCursor(target);
+            back();
+            guard([this] { save(); });
+        };
+        auto *panel = new WritingAssistant(*book, chapter, excerpt, target.hasSelection(), sessionKeys, back, accept);
+        pages->addWidget(panel);
+        pages->setCurrentWidget(panel);
+        tools->hide();
+        statusBar()->hide();
+    }
 
     bool guard(const Action &action)
     {
@@ -439,6 +470,7 @@ class Window : public QMainWindow
         tools->setMovable(false);
         tool("返回资料工作区", [this] { enterDossier(); });
         tool("保存", [this] { save(); });
+        tool("AI 写作", [this] { aiWriting(); });
         tool("人物名字", [this] {
             auto id = person();
             if (id)

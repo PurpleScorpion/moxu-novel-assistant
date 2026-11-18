@@ -8,6 +8,7 @@ inline void applyTheme(QApplication &app)
     palette.setColor(QPalette::Window, QColor("#09120f"));
     palette.setColor(QPalette::WindowText, QColor("#d9eae0"));
     palette.setColor(QPalette::Text, QColor("#d9eae0"));
+    palette.setColor(QPalette::PlaceholderText, QColor("#9baea1"));
     palette.setColor(QPalette::Base, QColor("#0d1c16"));
     palette.setColor(QPalette::AlternateBase, QColor("#13271f"));
     palette.setColor(QPalette::Button, QColor("#172c23"));
@@ -25,6 +26,7 @@ inline void applyTheme(QApplication &app)
     QPushButton,QToolButton {background:#162a21;border:1px solid #365443;border-radius:4px;padding:7px 12px;color:#dfefe4;}
     QPushButton:hover,QToolButton:hover {background:#234634;border-color:#68bd83;}
     QPushButton#primary {background:#a3eeb1;color:#102417;border-color:#a3eeb1;font-weight:600;}
+    QPushButton:disabled,QPushButton#primary:disabled {background:#122019;color:#778d7e;border-color:#2a3d31;}
     QListWidget,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QTableWidget {background:#101f19;border:1px solid #345140;border-radius:4px;padding:6px;}
     QListWidget::item {padding:8px;}
     QListWidget::item:selected {background:#254834;color:#bcffca;}
@@ -34,6 +36,11 @@ inline void applyTheme(QApplication &app)
     QMenu {padding:4px;background:#112019;border:1px solid #48634f;}
     QMenu::item {padding:7px 18px;} QMenu::item:selected {background:#284f36;}
     QHeaderView::section {background:#193324;color:#c7e9ce;padding:8px;border:none;}
+    QTreeWidget {background:#101f19;border:1px solid #345140;padding:6px;}
+    QTreeWidget::item {padding:5px;}
+    QTabWidget::pane {border:1px solid #345140;}
+    QTabBar::tab {background:#13271f;color:#b3c9bc;padding:8px 15px;}
+    QTabBar::tab:selected {background:#244634;color:#c5f9ce;}
     QStatusBar {color:#a7cfb3;}
     )");
 }
