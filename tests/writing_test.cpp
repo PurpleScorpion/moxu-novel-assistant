@@ -252,12 +252,19 @@ data: {"type":"message_stop"}
         };
         require(service->currentData() == "local" && models->count() == 2 && !models->isEditable(),
                 "未恢复书架站点与模型列表");
-        service->showPopup();
-        QApplication::processEvents();
-        require(service->view()->window()->frameGeometry().top() >=
-                    service->mapToGlobal(QPoint(0, service->height())).y() - 3,
-                "选择末项后列表向上展开");
-        service->hidePopup();
+        auto checkDropdownBelow = [](QComboBox *combo, const char *message) {
+            require(combo->count() >= 2, "方向测试需要至少两个选项");
+            combo->setCurrentIndex(combo->count() - 1);
+            QApplication::processEvents();
+            combo->showPopup();
+            require(QTest::qWaitFor([combo] { return combo->view()->isVisible(); }, 2000) &&
+                        combo->view()->window()->frameGeometry().top() >=
+                            combo->mapToGlobal(QPoint(0, combo->height())).y() - 3,
+                    message);
+            combo->hidePopup();
+        };
+        checkDropdownBelow(service, "选择末项后服务列表未向下展开");
+        checkDropdownBelow(models, "选择末项后模型列表未向下展开");
         require(service->findData("zai") < 0 && service->findData("glm") < 0, "写作页重复列出智谱接口");
         service->setCurrentIndex(service->findText("智谱 GLM"));
         require(service->currentData() == "zai-messages", "智谱默认接口应为 ZCode 兼容");
