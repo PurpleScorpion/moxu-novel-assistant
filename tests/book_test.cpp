@@ -118,6 +118,50 @@ int main(int argc, char **argv)
         if (other.historyUsage().count != 1 ||
             other.value("SELECT body FROM chapters WHERE id=1").toString() != "照常保存")
             return 17;
+
+        other.run("INSERT INTO people(id,name,attributes) VALUES(1,'林澈',''),(2,'苏禾','')");
+        other.run("INSERT INTO chapters(id,title) VALUES(9,'山门')");
+        other.run("INSERT INTO events(chapter,person,resource,delta,description) VALUES(9,1,'旧灵石',7,'山门礼')");
+        other.createResource("  声望  ");
+        for (const auto &name : QStringList{"积分", "旧灵石", "声望", " "})
+        {
+            try
+            {
+                other.createResource(name);
+                return 18;
+            }
+            catch (const std::runtime_error &)
+            {
+            }
+        }
+        if (!reopened.resourceNames().contains("声望") || !other.resourceNames().contains("旧灵石") ||
+            again.resourceNames().contains("声望"))
+            return 19;
+        other.atomic([&] {
+            for (int i = 1; i <= 65; ++i)
+                other.run("INSERT INTO events(chapter,person,resource,delta,description) VALUES(1,1,'旧灵石',1,?)",
+                          {QString("任务%1").arg(i)});
+        });
+        other.event(1, 2, "旧灵石", 5, "任务66");
+        other.event(1, 1, "声望", 2, "任务67");
+        LedgerFilter query{"林", "旧灵石", "任务", false};
+        const auto second = other.ledgerPage(query, 2);
+        if (second.total != 65 || second.pages != 3 || second.rows.size() != 30 ||
+            second.rows.first().last() != "任务31" || second.rows.first()[4] != "31")
+            return 20;
+        query.newestFirst = true;
+        query.description.clear();
+        const auto newest = other.ledgerPage(query, 1);
+        if (newest.rows.first() != QStringList{"第 4 章 · 山门", "林澈", "旧灵石", "7", "72", "山门礼"} ||
+            other.ledgerPage(query, 99).rows.last().last() != "任务1")
+            return 21;
+        query.description = "任务6";
+        const auto partial = other.ledgerPage(query, 3);
+        if (partial.number != 1 || partial.total != 7 || partial.rows.last()[4] != "6")
+            return 22;
+        query.description = "%";
+        if (other.ledgerPage(query, 1).total != 0)
+            return 23;
     }
     catch (const std::exception &e)
     {

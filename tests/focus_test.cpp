@@ -97,6 +97,20 @@ int main(int argc, char **argv)
         auto fields = visible<QLineEdit>(sheet());
         auto *desc = fields.last();
         desc->setText("完成任务");
+        const auto editorWidth = editor->width();
+        window.findChild<QPushButton *>("collapseChapters")->click();
+        QApplication::processEvents();
+        check(!window.findChild<QListWidget *>("chapterList")->isVisible() && editor->width() > editorWidth &&
+                  desc->isVisible() && desc->text() == "完成任务",
+              "收起目录时未扩宽正文或丢失了事件草稿");
+        click(window, "展开目录");
+        check(desc->isVisible() && desc->text() == "完成任务", "展开章节目录关闭了事件侧栏");
+        click(sheet(), "新建资源");
+        sheet().findChild<QLineEdit *>("newResourceName")->setText("灵石");
+        click(sheet(), "创建");
+        auto *resource = visible<QComboBox>(sheet()).last();
+        check(!resource->isEditable() && resource->currentText() == "灵石", "新建资源后没有自动选中");
+        resource->setCurrentIndex(resource->findText("积分"));
         auto *amount = visible<QSpinBox>(sheet()).first();
         amount->setValue(-5);
         click(sheet(), "保存事件");
@@ -119,6 +133,14 @@ int main(int argc, char **argv)
         visible<QCheckBox>(sheet()).first()->setChecked(false);
         click(sheet(), "保存事件");
         check(verify.balance(1, "积分", 1) == 240 && editor->toPlainText() == before, "仅记账改变了正文");
+        action("记录事件");
+        resource = visible<QComboBox>(sheet()).last();
+        resource->setCurrentIndex(resource->findText("灵石"));
+        visible<QLineEdit>(sheet()).last()->setText("获得灵石");
+        visible<QSpinBox>(sheet()).first()->setValue(12);
+        visible<QCheckBox>(sheet()).first()->setChecked(false);
+        click(sheet(), "保存事件");
+        check(verify.balance(1, "灵石", 1) == 12, "所选资源与实际入账的资源不同");
         action("历史版本");
         auto *versions = sheet().findChild<QListWidget *>("historyVersions");
         check(versions && versions->isVisible() && versions->count() >= 2, "历史版本列表未显示");
@@ -159,6 +181,32 @@ int main(int argc, char **argv)
         window.findChild<QSpinBox *>("bookHistoryLimit")->setValue(7);
         click(window, "应用并移除 8 份");
         check(usage->text().contains("共 2 份") && verify.historyLimits().perBook == 7, "未应用本书上限或未刷新用量");
+        window.findChild<QListWidget *>("navigation")->setCurrentRow(3);
+        auto *ledger = window.findChild<QTableWidget *>("eventTable");
+        check(ledger->isVisible() && ledger->rowCount() == 3 && ledger->item(0, 5)->text() == "获得灵石" &&
+                  ledger->horizontalHeaderItem(4)->text() == "结余",
+              "账本列顺序或默认排序错误");
+        window.findChild<QLineEdit *>("ledgerPerson")->setText("澈");
+        window.findChild<QLineEdit *>("ledgerDescription")->setText("丹药");
+        for (auto *combo : visible<QComboBox>(window))
+            if (combo->accessibleName() == "筛选资源")
+                combo->setCurrentIndex(combo->findText("积分"));
+        click(window, "搜索");
+        check(ledger->rowCount() == 1 && ledger->item(0, 4)->text() == "240", "组合检索未保留事件发生后的真实结余");
+        click(window, "重置");
+        for (auto *combo : visible<QComboBox>(window))
+            if (combo->accessibleName() == "事件排序")
+                combo->setCurrentIndex(1);
+        check(ledger->rowCount() == 3 && ledger->item(0, 5)->text() == "完成任务", "账本正序或重置错误");
+        verify.run(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<31) "
+            "INSERT INTO events(chapter,person,resource,delta,description) SELECT 1,2,'灵石',1,'采集'||i FROM n");
+        click(window, "搜索");
+        check(ledger->rowCount() == 30, "账本第一页条数错误");
+        click(window, "下一页");
+        check(ledger->rowCount() == 4 && ledger->item(3, 4)->text() == "31", "翻页行数或跨页余额错误");
+        click(window, "上一页");
+        check(ledger->rowCount() == 30 && ledger->item(0, 5)->text() == "完成任务", "上一页未恢复结果");
         click(window, "进入专注写作");
         action("历史版本");
         bool currentLimits = false;
@@ -224,7 +272,7 @@ int main(int argc, char **argv)
                   verify.value("SELECT body FROM chapters WHERE id=2").toString() == "林澈",
               "改名未保留原章节");
         auto *chapterList = visible<QListWidget>(window).first();
-        check(chapterList->item(1)->text() == "02  ·  重逢", "目录没有显示序号及新章名");
+        check(chapterList->item(1)->text() == "第 2 章 · 重逢", "目录没有显示序号及新章名");
         auto titleStart = [&] {
             QApplication::processEvents();
             const auto bounds = chapterList->visualItemRect(chapterList->item(1));

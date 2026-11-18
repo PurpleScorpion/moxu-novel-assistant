@@ -49,7 +49,8 @@ class MoxuStyle : public QProxyStyle
                   QStyleHintReturn *result) const override
     {
         if (hint == SH_ComboBox_Popup && widget &&
-            (widget->objectName() == "aiService" || widget->objectName() == "aiModel"))
+            (widget->objectName() == "aiService" || widget->objectName() == "aiModel" ||
+             widget->objectName() == "resourceChoice" || widget->objectName() == "ledgerSort"))
             return 0;
         return QProxyStyle::styleHint(hint, option, widget, result);
     }

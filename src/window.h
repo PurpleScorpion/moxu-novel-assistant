@@ -168,7 +168,7 @@ class Window : public QMainWindow
     }
     void setChapterLabel(QListWidgetItem *item, const QString &name)
     {
-        item->setText(QString("%1  ·  %2").arg(chapters->row(item) + 1, 2, 10, QChar('0')).arg(name));
+        item->setText(numberedChapter(chapters->row(item) + 1, name));
         item->setToolTip(name);
     }
     void renameChapter()
@@ -504,7 +504,11 @@ class Window : public QMainWindow
     {
         beginSheet("记录事件");
         auto *people = personChoice();
-        auto *resource = sheet->field("资源名", "积分");
+        auto *picker = new ResourcePicker(false);
+        sheet->form->addWidget(new QLabel("资源"));
+        sheet->form->addWidget(picker);
+        picker->load(*book);
+        auto *resource = picker->choices;
         sheet->form->addWidget(new QLabel("变动数额（收入为正，支出为负）"));
         auto *delta = new QSpinBox;
         delta->setRange(-1000000000, 1000000000);
@@ -517,12 +521,12 @@ class Window : public QMainWindow
         preview->setMaximumHeight(110);
         auto refresh = [=, this] {
             guard([&] {
-                if (people->currentIndex() < 0 || resource->text().trimmed().isEmpty())
+                if (people->currentIndex() < 0 || resource->currentIndex() < 0)
                 {
                     preview->clear();
                     return;
                 }
-                QString unit = resource->text().trimmed();
+                QString unit = resource->currentData().toString();
                 sheet->report({});
                 auto balance = book->balance(people->currentData().toInt(), unit, chapter);
                 QString text = QString("%1：%2 → %3").arg(unit).arg(balance).arg(balance + delta->value());
@@ -533,13 +537,15 @@ class Window : public QMainWindow
         };
         connect(people, &QComboBox::currentIndexChanged, sheet, refresh);
         connect(delta, &QSpinBox::valueChanged, sheet, refresh);
-        connect(resource, &QLineEdit::textChanged, sheet, refresh);
+        connect(resource, &QComboBox::currentIndexChanged, sheet, refresh);
         connect(description, &QLineEdit::textChanged, sheet, refresh);
         connect(insert, &QCheckBox::toggled, sheet, refresh);
         refresh();
         button(sheet->form, "保存事件", [=, this] {
+            if (picker->isCreating())
+                throw std::runtime_error("请先创建新资源，或取消后使用已选资源。");
             const int id = people->currentData().toInt();
-            const auto unit = resource->text().trimmed(), desc = description->text().trimmed();
+            const auto unit = resource->currentData().toString(), desc = description->text().trimmed();
             if (!id || unit.isEmpty() || desc.isEmpty())
                 throw std::runtime_error("请选择人物，并填写资源名和事件描述。");
             save();
@@ -616,10 +622,11 @@ class Window : public QMainWindow
     }
     void timeline()
     {
-        auto q =
-            book->run("SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
-                      "person,resource ORDER BY chapter,e.id),c.id FROM events e JOIN chapters c ON c.id=e.chapter "
-                      "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
+        auto q = book->run(
+            "WITH numbered AS (SELECT id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters) "
+            "SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
+            "person,resource ORDER BY chapter,e.id),c.id,c.seq FROM events e JOIN numbered c ON c.id=e.chapter "
+            "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
         beginSheet("时间轴与收支明细");
         auto *view = new QTextEdit;
         view->setReadOnly(true);
@@ -632,7 +639,8 @@ class Window : public QMainWindow
             if (lastChapter != q.value(6))
             {
                 lastChapter = q.value(6);
-                html += QString("<h3 style='color:#a3eeb1'>%1</h3>").arg(q.value(0).toString().toHtmlEscaped());
+                html += QString("<h3 style='color:#a3eeb1'>%1</h3>")
+                            .arg(numberedChapter(q.value(7).toLongLong(), q.value(0).toString()).toHtmlEscaped());
             }
             auto amount = q.value(4).toString();
             if (q.value(4).toLongLong() > 0)
@@ -952,7 +960,13 @@ class Window : public QMainWindow
         auto *left = panelColumn(cols, 0, true);
         left->parentWidget()->setFixedWidth(178);
         chapters->setObjectName("chapterList");
-        left->addWidget(sectionLabel("章节目录"));
+        auto *directoryHeader = new QHBoxLayout;
+        left->addLayout(directoryHeader);
+        directoryHeader->addWidget(sectionLabel("章节目录"), 1);
+        auto *collapse = new QPushButton("收起");
+        collapse->setAccessibleName("收起章节目录");
+        collapse->setObjectName("collapseChapters");
+        directoryHeader->addWidget(collapse);
         left->addWidget(chapters);
         button(left, "＋ 新章节", [this] {
             save();
@@ -973,6 +987,24 @@ class Window : public QMainWindow
         titleBlock->setSpacing(2);
         auto *chapterHeader = new QHBoxLayout;
         right->addLayout(chapterHeader);
+        auto *expand = new QPushButton("展开目录");
+        chapterHeader->addWidget(expand);
+        auto *directory = left->parentWidget();
+        auto setCollapsed = [directory, expand](bool collapsed) {
+            directory->setVisible(!collapsed);
+            expand->setVisible(collapsed);
+        };
+        setCollapsed(QSettings().value("writing/chapterDirectoryCollapsed", false).toBool());
+        connect(collapse, &QPushButton::clicked, this, [this, setCollapsed] {
+            setCollapsed(true);
+            if (!sheet)
+                editor->setFocus();
+            QSettings().setValue("writing/chapterDirectoryCollapsed", true);
+        });
+        connect(expand, &QPushButton::clicked, this, [setCollapsed] {
+            setCollapsed(false);
+            QSettings().setValue("writing/chapterDirectoryCollapsed", false);
+        });
         heading->setTextFormat(Qt::PlainText);
         heading->setWordWrap(true);
         chapterHeader->addLayout(titleBlock, 1);

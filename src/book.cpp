@@ -118,6 +118,9 @@ Book::Book(const QString &path, const QString &newTitle)
                     run("ALTER TABLE revisions ADD COLUMN rolling INTEGER NOT NULL DEFAULT 0");
             });
         run("CREATE INDEX IF NOT EXISTS revision_history ON revisions(rolling,chapter,id)");
+        run("CREATE TABLE IF NOT EXISTS resources(name TEXT PRIMARY KEY NOT NULL)");
+        run("CREATE INDEX IF NOT EXISTS event_resource ON events(resource)");
+        run("CREATE INDEX IF NOT EXISTS event_order ON events(chapter,id)");
         run("CREATE TABLE IF NOT EXISTS history_settings(id INTEGER PRIMARY KEY CHECK(id=1),"
             "per_chapter INTEGER NOT NULL CHECK(per_chapter>=0),per_book INTEGER NOT NULL CHECK(per_book>=0))");
     }
@@ -251,6 +254,74 @@ qint64 Book::balance(int person, const QString &resource, int chapter) const
     return value("SELECT COALESCE(SUM(delta),0) FROM events WHERE person=? AND resource=? AND chapter<=?",
                  {person, resource, chapter})
         .toLongLong();
+}
+QStringList Book::resourceNames() const
+{
+    auto q = run("SELECT name FROM (SELECT name FROM resources UNION SELECT resource FROM events UNION SELECT '积分') "
+                 "ORDER BY name!='积分',name");
+    QStringList names;
+    while (q.next())
+        names.append(q.value(0).toString());
+    return names;
+}
+void Book::createResource(const QString &name)
+{
+    const auto clean = name.trimmed();
+    if (clean.isEmpty())
+        fail("请填写资源名。");
+    atomic([&] {
+        if (clean == "积分" || value("SELECT 1 FROM resources WHERE name=? UNION ALL "
+                                     "SELECT 1 FROM events WHERE resource=? LIMIT 1",
+                                     {clean, clean})
+                                   .isValid())
+            fail("本书已有同名资源，请从列表选择。");
+        run("INSERT INTO resources(name) VALUES(?)", {clean});
+    });
+}
+LedgerPage Book::ledgerPage(const LedgerFilter &filter, qint64 page) const
+{
+    QString from = " FROM events e JOIN people p ON p.id=e.person WHERE 1";
+    QVariantList args;
+    if (!filter.person.isEmpty())
+    {
+        from += " AND instr(lower(p.name),lower(?))>0";
+        args << filter.person;
+    }
+    if (!filter.resource.isEmpty())
+    {
+        from += " AND e.resource=?";
+        args << filter.resource;
+    }
+    if (!filter.description.isEmpty())
+    {
+        from += " AND instr(lower(e.description),lower(?))>0";
+        args << filter.description;
+    }
+    LedgerPage result;
+    result.total = value("SELECT count(*)" + from, args).toLongLong();
+    result.pages = result.total ? 1 + (result.total - 1) / LedgerPage::pageSize : 1;
+    result.number = qBound(qint64(1), page, result.pages);
+    const QString order = filter.newestFirst ? " ORDER BY chapter DESC,id DESC" : " ORDER BY chapter,id";
+    args << LedgerPage::pageSize << (result.number - 1) * LedgerPage::pageSize;
+    // Page the matches first. Each returned balance includes all earlier events in its account.
+    auto rows =
+        run("WITH matches AS (SELECT e.*,p.name" + from + order +
+                " LIMIT ? OFFSET ?),"
+                " numbered AS (SELECT id AS chapter_id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters)"
+                " SELECT seq,title,m.name,m.resource,m.delta,"
+                "(SELECT sum(a.delta) FROM events a WHERE a.person=m.person AND a.resource=m.resource "
+                " AND (a.chapter,a.id)<=(m.chapter,m.id)),m.description FROM matches m "
+                "JOIN numbered c ON c.chapter_id=m.chapter" +
+                order,
+            args);
+    while (rows.next())
+    {
+        QStringList row{numberedChapter(rows.value(0).toLongLong(), rows.value(1).toString())};
+        for (int col = 2; col < 7; ++col)
+            row << rows.value(col).toString();
+        result.rows << row;
+    }
+    return result;
 }
 void Book::event(int chapter, int person, const QString &resource, int delta, const QString &description,
                  const QString *body)

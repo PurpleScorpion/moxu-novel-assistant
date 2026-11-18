@@ -1,5 +1,6 @@
 #pragma once
 #include "book.h"
+#include "event_ledger.h"
 #include "history_settings.h"
 #include "interface.h"
 #include "note_editor.h"
@@ -20,7 +21,7 @@ class Dossier : public QWidget
     HistorySettings *historySettings = new HistorySettings;
     std::function<void(QString)> renameBook;
     bool loading = false;
-    QTableWidget *ledger = new QTableWidget;
+    EventLedger *ledger = new EventLedger;
     QComboBox *from = new QComboBox, *to = new QComboBox;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
@@ -160,19 +161,7 @@ class Dossier : public QWidget
                                q.value(2).toString());
         }
         else if (page == 3)
-        {
-            ledger->setRowCount(0);
-            auto q = book->run("SELECT c.title,p.name,e.description,resource,delta,SUM(delta) OVER(PARTITION BY "
-                               "person,resource ORDER BY chapter,e.id) FROM events e JOIN chapters c ON e.chapter=c.id "
-                               "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
-            while (q.next())
-            {
-                int row = ledger->rowCount();
-                ledger->insertRow(row);
-                for (int i = 0; i < 6; i++)
-                    ledger->setItem(row, i, new QTableWidgetItem(q.value(i).toString()));
-            }
-        }
+            ledger->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
@@ -322,16 +311,7 @@ class Dossier : public QWidget
             });
         });
         auto *log = section("事件账本");
-        log->addWidget(ledger);
-        ledger->setColumnCount(6);
-        ledger->verticalHeader()->hide();
-        ledger->setAlternatingRowColors(true);
-        ledger->setShowGrid(false);
-        ledger->setSelectionBehavior(QAbstractItemView::SelectRows);
-        ledger->setHorizontalHeaderLabels({"章节", "人物", "事件", "资源", "变动", "结余"});
-        ledger->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        ledger->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-        ledger->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+        log->addWidget(ledger, 1);
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
         {
             auto *editor = new NoteEditor(scope, [this](NoteScope target, qint64 id) {

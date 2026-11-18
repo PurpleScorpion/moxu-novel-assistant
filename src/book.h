@@ -17,6 +17,24 @@ struct HistoryUsage
     qint64 count, bytes, legacyCount;
 };
 
+struct LedgerFilter
+{
+    QString person, resource, description;
+    bool newestFirst = true;
+};
+
+struct LedgerPage
+{
+    static constexpr int pageSize = 30;
+    qint64 number = 1, pages = 1, total = 0;
+    QList<QStringList> rows;
+};
+
+inline QString numberedChapter(qint64 number, const QString &title)
+{
+    return QString("第 %1 章 · %2").arg(number).arg(title);
+}
+
 class Book
 {
     QString connection;
@@ -53,4 +71,7 @@ class Book
     void event(int chapter, int person, const QString &resource, int delta, const QString &description,
                const QString *body = nullptr);
     qint64 balance(int person, const QString &resource, int chapter) const;
+    QStringList resourceNames() const;
+    void createResource(const QString &name);
+    LedgerPage ledgerPage(const LedgerFilter &filter, qint64 page) const;
 };
