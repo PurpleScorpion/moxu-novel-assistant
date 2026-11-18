@@ -75,10 +75,11 @@ class MatrixBanner : public QWidget
     {
         QPainter p(this);
         p.fillRect(rect(), QColor("#10251a"));
-        p.setFont(QFont("Consolas", 11));
-        const QString glyphs = "01ｱｲｳｴｵ01";
-        for (int x = width() / 2; x < width(); x += 15)
-            for (int y = 0; y < height() + 15; y += 16)
+        p.setFont(QFont("Microsoft YaHei UI", 10));
+        const QString glyphs = "墨序书卷山河风月星辰春秋诗文云海";
+        const int step = p.fontMetrics().height() + 2;
+        for (int x = width() / 2; x < width(); x += step)
+            for (int y = step; y < height() + step; y += step)
             {
                 int seed = (x * 3 + y * 13 + x * y / 11) % 91;
                 if (seed < 27)

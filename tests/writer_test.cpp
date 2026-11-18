@@ -120,14 +120,14 @@ int main(int argc, char **argv)
     if (coverFor(path)->coverImage().toImage().pixelColor(10, 10) != QColor("#893b37") ||
         !coverFor(dir.filePath("新书.moxu"))->coverImage().isNull())
         return 35;
+    if (argc == 3 && !window.grab().save(QString::fromLocal8Bit(argv[2])))
+        return 23;
     editCover();
     if (!click("恢复默认封面") || !click("保存封面") || !coverFor(path)->coverImage().isNull())
         return 36;
     auto books = (*recent)->findItems("测试书", Qt::MatchExactly);
     if (books.size() != 2)
         return 15;
-    if (argc == 3 && !window.grab().save(QString::fromLocal8Bit(argv[2])))
-        return 23;
     const auto duplicatePath = dir.filePath("新书.moxu");
     for (auto *item : books)
     {

@@ -7,12 +7,45 @@ class BookCover : public QPushButton
     QColor cloth;
     QPixmap artwork;
     QToolButton *more = new QToolButton(this);
+    int captionHeight() const
+    {
+        return 2 * (fontMetrics().height() + 2) + 6;
+    }
+
+    static void drawTitle(QPainter &p, const QString &title, const QRectF &area, int rows)
+    {
+        QTextLayout lines(title, p.font());
+        QTextOption options;
+        options.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        lines.setTextOption(options);
+        lines.beginLayout();
+        qreal y = area.top();
+        for (int row = 0; row < rows; ++row)
+        {
+            auto line = lines.createLine();
+            if (!line.isValid())
+                break;
+            line.setLineWidth(area.width());
+            if (row == rows - 1 && line.textStart() + line.textLength() < title.size())
+            {
+                p.drawText(QPointF(area.x(), y + line.ascent()),
+                           p.fontMetrics().elidedText(title.mid(line.textStart()), Qt::ElideRight, int(area.width())));
+                break;
+            }
+            line.draw(&p, QPointF(area.x(), y));
+            y += line.height() + 2;
+        }
+        lines.endLayout();
+    }
 
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        const QRectF cover = QRectF(rect()).adjusted(4, 3, -7, -8);
+        p.setFont(font());
+        p.setPen(QColor("#e0f1e6"));
+        const QRectF cover = QRectF(rect()).adjusted(4, 3, -7, -8 - captionHeight());
+        drawTitle(p, title, QRectF(cover.left(), cover.bottom() + 10, cover.width(), captionHeight()), 2);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor("#899886"));
         p.drawRoundedRect(cover.translated(2, 4), 4, 4);
@@ -36,48 +69,23 @@ class BookCover : public QPushButton
             QRectF source(QPointF(), crop);
             source.moveCenter(QRectF(artwork.rect()).center());
             p.drawPixmap(cover, artwork, source);
-            QLinearGradient shade(cover.topLeft(), cover.bottomLeft());
-            shade.setColorAt(0, QColor(0, 0, 0, 65));
-            shade.setColorAt(0.35, QColor(0, 0, 0, 115));
-            shade.setColorAt(1, Qt::transparent);
-            p.fillRect(cover, shade);
             p.restore();
         }
         p.setPen(Qt::NoPen);
         p.fillRect(QRectF(cover.x() + 7, cover.y() + 1, 3, cover.height() - 2), QColor(0, 0, 0, 65));
         p.fillRect(QRectF(cover.x() + 10, cover.y() + 1, 1, cover.height() - 2), QColor(255, 255, 255, 42));
+        if (!artwork.isNull())
+            return;
         p.setClipRect(cover.adjusted(12, 1, -1, -1));
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(QColor(207, 218, 172, 47), 1));
-        if (artwork.isNull())
-            for (int radius = 28; radius <= 124; radius += 12)
-                p.drawEllipse(cover.bottomRight() + QPointF(-12, 24), radius, radius);
+        for (int radius = 28; radius <= 124; radius += 12)
+            p.drawEllipse(cover.bottomRight() + QPointF(-12, 24), radius, radius);
         const QRectF area = cover.adjusted(23, 45, -15, -27);
         QFont face("Microsoft YaHei UI", 14, QFont::DemiBold);
-        QTextLayout lines(title, face);
-        QTextOption options;
-        options.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        lines.setTextOption(options);
-        lines.beginLayout();
         p.setFont(face);
         p.setPen(QColor("#f0edda"));
-        qreal y = area.top();
-        for (int row = 0; row < 3; ++row)
-        {
-            auto line = lines.createLine();
-            if (!line.isValid())
-                break;
-            line.setLineWidth(area.width());
-            if (row == 2 && line.textStart() + line.textLength() < title.size())
-            {
-                p.drawText(QPointF(area.x(), y + line.ascent()),
-                           p.fontMetrics().elidedText(title.mid(line.textStart()), Qt::ElideRight, int(area.width())));
-                break;
-            }
-            line.draw(&p, QPointF(area.x(), y));
-            y += line.height() + 2;
-        }
-        lines.endLayout();
+        drawTitle(p, title, area, 3);
         p.setPen(QPen(QColor("#c4c4a2"), 2));
         p.drawLine(area.topLeft() - QPointF(0, 10), area.topLeft() + QPointF(22, -10));
     }
@@ -88,6 +96,10 @@ class BookCover : public QPushButton
     }
 
   public:
+    QSize sizeHint() const override
+    {
+        return QSize(161, 209 + captionHeight());
+    }
     BookCover(const QString &name, const QString &path) : title(name)
     {
         static const QColor colors[] = {QColor("#315344"), QColor("#364957"), QColor("#64513f"), QColor("#514454")};

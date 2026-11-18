@@ -242,7 +242,7 @@ class Window : public QMainWindow
         auto *side = new QVBoxLayout;
         columns->addLayout(side);
         auto *preview = new BookCover(title, path);
-        preview->setFixedSize(161, 209);
+        preview->setFixedSize(preview->sizeHint());
         preview->useAsPreview();
         QPixmap previous;
         if (!original.isEmpty())
@@ -369,8 +369,8 @@ class Window : public QMainWindow
                 continue;
             auto *item = new QListWidgetItem(title, recent);
             item->setData(Qt::UserRole, path);
-            item->setSizeHint(QSize(161, 209));
             auto *cover = new BookCover(title, path);
+            item->setSizeHint(cover->sizeHint());
             if (!artwork.isEmpty())
             {
                 QPixmap image;
