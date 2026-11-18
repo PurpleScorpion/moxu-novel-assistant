@@ -9,6 +9,17 @@
 #include <wincred.h>
 #endif
 
+inline bool isGlmSite(const QString &id)
+{
+    return id == "glm" || id == "zai" || id == "zai-messages";
+}
+
+inline QString activeGlmSite()
+{
+    const auto id = QSettings().value("writing/glmSite").toString();
+    return isGlmSite(id) ? id : QStringLiteral("zai-messages");
+}
+
 struct AiSite
 {
     QString id, name, address;
@@ -151,6 +162,7 @@ class AiConfig : public QWidget
     QComboBox *protocol = new QComboBox;
     QCheckBox *remember = new QCheckBox("在此电脑记住密钥（Windows 凭据管理器）");
     QLabel *notice = new QLabel;
+    QPushButton *useGlm = new QPushButton("保存并设为写作接口");
     QHash<QString, QString> &keys;
     QString id;
     QNetworkAccessManager network;
@@ -225,6 +237,10 @@ class AiConfig : public QWidget
         AiSite site = sites.value(row);
         QSignalBlocker block(address), blockProtocol(protocol);
         id = site.id;
+        useGlm->setVisible(isGlmSite(id));
+        const bool active = id == activeGlmSite();
+        useGlm->setText(active ? "当前写作接口" : "保存并设为写作接口");
+        useGlm->setEnabled(!active);
         name->setText(site.name);
         protocol->setCurrentIndex(qMax(0, protocol->findData(site.protocol)));
         address->setText(site.address);
@@ -235,7 +251,7 @@ class AiConfig : public QWidget
         remember->setChecked(!stored.isEmpty());
         notice->clear();
     }
-    void save()
+    void save(bool activateGlm = false)
     {
         AiSite site{id, name->text().trimmed(), address->text().trimmed(), {}, protocol->currentData().toString()};
         for (auto line : models->toPlainText().split('\n'))
@@ -254,6 +270,8 @@ class AiConfig : public QWidget
         if (remember->isChecked() || !storedAiKey(credential).isEmpty())
             storeAiKey(credential, remember->isChecked() ? key->text().trimmed() : QString());
         QSettings settings;
+        if (activateGlm && isGlmSite(site.id))
+            settings.setValue("writing/glmSite", site.id);
         settings.setValue("aiSites/" + site.id,
                           QJsonDocument(QJsonObject{{"name", site.name},
                                                     {"protocol", site.protocol},
@@ -284,7 +302,7 @@ class AiConfig : public QWidget
             list->item(row)->setText(site.name);
             load(row);
         }
-        notice->setText("站点和模型已保存");
+        notice->setText(activateGlm ? "已设为「智谱 GLM」的写作接口" : "站点和模型已保存");
     }
 
   public:
@@ -340,6 +358,7 @@ class AiConfig : public QWidget
         auto *commit = new QPushButton("保存配置");
         buttons->addWidget(done);
         buttons->addWidget(commit);
+        buttons->addWidget(useGlm);
         for (const auto &site : sites)
             list->addItem(site.name);
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) { load(row); });
@@ -361,16 +380,20 @@ class AiConfig : public QWidget
             name->setFocus();
         });
         connect(done, &QPushButton::clicked, this, [this, back] { back(id); });
-        connect(commit, &QPushButton::clicked, this, [this] {
+        auto saveConfig = [this](bool activateGlm) {
             try
             {
-                save();
+                save(activateGlm);
             }
             catch (const std::exception &e)
             {
                 notice->setText(QString::fromUtf8(e.what()));
             }
-        });
+        };
+        connect(commit, &QPushButton::clicked, this, [saveConfig] { saveConfig(false); });
+        connect(useGlm, &QPushButton::clicked, this, [saveConfig] { saveConfig(true); });
+        if (isGlmSite(selected))
+            selected = activeGlmSite();
         int row = 0;
         for (int i = 0; i < sites.size(); ++i)
             if (sites[i].id == selected)

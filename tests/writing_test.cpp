@@ -258,9 +258,9 @@ data: {"type":"message_stop"}
                     service->mapToGlobal(QPoint(0, service->height())).y() - 3,
                 "选择末项后列表向上展开");
         service->hidePopup();
-        service->setCurrentIndex(service->findData("zai"));
-        require(models->findText("glm-5.2") >= 0, "切换站点后模型未更新");
-        service->setCurrentIndex(service->findData("zai-messages"));
+        require(service->findData("zai") < 0 && service->findData("glm") < 0, "写作页重复列出智谱接口");
+        service->setCurrentIndex(service->findText("智谱 GLM"));
+        require(service->currentData() == "zai-messages", "智谱默认接口应为 ZCode 兼容");
         click(window, "测试连接");
         require(waitStatus("连接成功") && wire.contains("Bearer local-only-test") &&
                     wire.toLower().contains("anthropic-version: 2023-06-01") && !wire.contains("少用副词") &&
@@ -275,10 +275,27 @@ data: {"type":"message_stop"}
                     anthPayload["messages"].toArray().size() == 1 &&
                     anthPayload["messages"].toArray().first().toObject()["role"] == "user",
                 "Anthropic 写作请求格式错误");
-        service->setCurrentIndex(service->findData("glm"));
+        auto chooseGlm = [&](const QString &label, bool activate) {
+            click(window, "AI 配置");
+            auto *list = visible<QListWidget>(window);
+            list->setCurrentItem(list->findItems(label, Qt::MatchExactly).first());
+            if (activate)
+                click(window, "保存并设为写作接口");
+            click(window, "返回");
+        };
+        chooseGlm("我的国际站", false);
+        require(service->currentData() == "zai-messages", "仅浏览配置切换了接口");
+        chooseGlm("我的国际站", true);
+        require(service->currentText() == "智谱 GLM" && service->currentData() == "zai" &&
+                    models->findText("glm-5.2") >= 0 && service->findData("zai-messages") < 0,
+                "国际通用接口切换失败");
+        chooseGlm("智谱 GLM（国内）", true);
+        require(service->currentText() == "智谱 GLM" && service->currentData() == "glm" && activeGlmSite() == "glm",
+                "国内接口切换失败");
         models->setCurrentText("glm-5.3");
         click(window, "测试连接");
-        require(waitStatus("连接成功") && waitStatus("仅返回思考内容"), "GLM-5.3 始终思考模式测试失败");
+        require(waitStatus("连接成功") && waitStatus("仅返回思考内容") && !wire.contains("local-only-test"),
+                "国内接口的模型或密钥错误");
         service->setCurrentIndex(service->findData("local"));
         models->setCurrentIndex(1);
         click(window, "测试连接");

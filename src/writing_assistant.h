@@ -59,10 +59,12 @@ class WritingAssistant : public QWidget
     {
         QSignalBlocker block(service);
         sites = aiSites();
+        const auto glm = activeGlmSite();
+        sites.removeIf([&](const AiSite &entry) { return isGlmSite(entry.id) && entry.id != glm; });
         service->clear();
         for (const auto &entry : sites)
-            service->addItem(entry.name, entry.id);
-        service->setCurrentIndex(qMax(0, service->findData(selected)));
+            service->addItem(isGlmSite(entry.id) ? QStringLiteral("智谱 GLM") : entry.name, entry.id);
+        service->setCurrentIndex(qMax(0, service->findData(isGlmSite(selected) ? glm : selected)));
         loadService();
     }
     QPair<QString, QString> messages() const
@@ -213,7 +215,7 @@ class WritingAssistant : public QWidget
         auto *reply = network.post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
         pending = reply;
         elapsed.start();
-        phase = probe ? "正在测试站点和模型" : "正在连接 " + site().name;
+        phase = probe ? "正在测试站点和模型" : "正在连接 " + service->currentText();
         updateProgress();
         setBusy(true);
         progress.start(1000);
@@ -305,7 +307,7 @@ class WritingAssistant : public QWidget
             if (probe)
             {
                 status->setText(QString("连接成功 · %1 / %2 · %3 毫秒")
-                                    .arg(site().name, model->currentText())
+                                    .arg(service->currentText(), model->currentText())
                                     .arg(elapsed.elapsed()) +
                                 (reasoningOnly ? "（本次短测试仅返回思考内容）" : ""));
                 return;
