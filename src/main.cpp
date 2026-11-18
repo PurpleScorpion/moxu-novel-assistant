@@ -2,14 +2,24 @@
 
 int main(int argc, char **argv)
 {
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
+    QLocale::setDefault(QLocale(QLocale::Chinese, QLocale::China));
+    QTranslator chinese;
+    if (chinese.load(":/lang/qtbase_zh_CN.qm"))
+        app.installTranslator(&chinese);
+    DialogSizing dialogs;
+    app.installEventFilter(&dialogs);
+    applyTheme(app);
     app.setApplicationName("Moxu");
     app.setOrganizationName("Moxu");
-    app.setFont(QFont("Microsoft YaHei", 10));
     Window window;
     window.show();
     if (app.arguments().contains("--startup-check"))
     {
+        QDialogButtonBox controls(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        if (!controls.button(QDialogButtonBox::Cancel)->text().contains("取消"))
+            return 6;
         QTemporaryDir temporary;
         try
         {

@@ -1,5 +1,5 @@
 #pragma once
-#include "book.h"
+#include "dossier.h"
 #include <QtWidgets>
 #include <cmath>
 #include <memory>
@@ -11,6 +11,9 @@ class Window : public QMainWindow
     std::unique_ptr<QLockFile> lock;
     QStackedWidget *pages = new QStackedWidget;
     QWidget *shelf = new QWidget;
+    Dossier *dossier;
+    QWidget *writer = new QWidget, *storage = new QWidget;
+    QLabel *location = new QLabel, *directoryMessage = new QLabel;
     QListWidget *recent = new QListWidget;
     QListWidget *chapters = new QListWidget;
     QPlainTextEdit *editor = new QPlainTextEdit;
@@ -105,8 +108,10 @@ class Window : public QMainWindow
         lock.reset();
         pages->setCurrentWidget(shelf);
         tools->hide();
+        statusBar()->hide();
         status->clear();
         setWindowTitle("墨序 · 小说辅助系统");
+        location->setText(QDir::toNativeSeparators(QSettings().value("booksDir", defaultBooksPath()).toString()));
         recent->clear();
         for (const auto &path : QSettings().value("recent").toStringList())
             recent->addItem(path);
@@ -133,8 +138,7 @@ class Window : public QMainWindow
         chapters->setCurrentRow(0);
         loadChapter(chapters->item(0)->data(Qt::UserRole).toInt());
         setWindowTitle(name + " · 墨序");
-        pages->setCurrentIndex(1);
-        tools->show();
+        enterDossier();
         QSettings settings;
         auto paths = settings.value("recent").toStringList();
         paths.removeAll(path);
@@ -146,30 +150,54 @@ class Window : public QMainWindow
         auto name = ask("书名");
         if (name.isEmpty())
             return;
-        auto path = QFileDialog::getSaveFileName(this, "保存新书",
-                                                 QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) +
-                                                     "/" + name + ".moxu",
-                                                 "墨序书籍 (*.moxu)");
+        QString filename = name;
+        filename.replace(QRegularExpression(R"rx([<>:"/\\|?*\x00-\x1f])rx"), "_");
+        auto dir = QDir(QSettings().value("booksDir", defaultBooksPath()).toString());
+        auto path = dir.filePath(filename + ".moxu");
+        if (QFileInfo::exists(path))
+            path = QFileDialog::getSaveFileName(this, "书籍已存在，请另选文件名", path, "墨序书籍 (*.moxu)");
         openBook(path, name);
     }
-    void editPerson(bool existing)
+    void enterDossier(int page = 0)
     {
-        int id = existing ? person() : 0;
-        if (existing && !id)
+        save();
+        dossier->enter(book.get(), page);
+        setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+        pages->setCurrentWidget(dossier);
+        tools->hide();
+        statusBar()->hide();
+    }
+    void setDirectory(QString path)
+    {
+        if (path.isEmpty())
             return;
-        auto name = ask("人物名", book->value("SELECT name FROM people WHERE id=?", {id}).toString());
-        if (name.isEmpty())
+        path = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        if (!QDir().mkpath(path))
+        {
+            directoryMessage->setText("无法创建书籍目录，请选择有写入权限的位置。");
             return;
-        bool ok = false;
-        auto attrs = QInputDialog::getMultiLineText(
-            this, "人物资料", "自定义属性，每行一项（例如 境界：筑基）",
-            book->value("SELECT attributes FROM people WHERE id=?", {id}).toString(), &ok);
-        if (!ok)
+        }
+        QTemporaryFile probe(QDir(path).filePath(".moxu-write-XXXXXX"));
+        if (!probe.open())
+        {
+            directoryMessage->setText("该目录无法写入，请选择其他目录。");
             return;
-        if (existing)
-            book->run("UPDATE people SET name=?,attributes=? WHERE id=?", {name, attrs, id});
-        else
-            book->run("INSERT INTO people(name,attributes) VALUES(?,?)", {name, attrs});
+        }
+        QSettings settings;
+        settings.setValue("booksDir", path);
+        settings.sync();
+        if (settings.status() != QSettings::NoError)
+        {
+            directoryMessage->setText("保存目录设置失败");
+            return;
+        }
+        showShelf();
+    }
+    void chooseStorage()
+    {
+        pages->setCurrentWidget(storage);
+        tools->hide();
+        directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
     }
     void record()
     {
@@ -297,19 +325,21 @@ class Window : public QMainWindow
         while (edges.next())
         {
             QLineF edge(points[edges.value(0).toInt()], points[edges.value(1).toInt()]);
-            scene.addLine(edge, QPen(QColor("#66837a"), 2));
+            scene.addLine(edge, QPen(QColor("#68bd83"), 2));
             auto label = scene.addText(edges.value(2).toString());
+            label->setDefaultTextColor(QColor("#a4f2aa"));
             label->setPos(edge.center());
         }
         for (auto &p : people)
         {
             auto loc = points[p.first];
             auto label = scene.addText(p.second);
+            label->setDefaultTextColor(QColor("#e0f6e6"));
             auto box = label->boundingRect();
             label->setPos(loc - QPointF(box.width() / 2, box.height() / 2));
             label->setZValue(2);
             auto bg =
-                scene.addRect(label->sceneBoundingRect().adjusted(-6, -2, 6, 2), QPen(Qt::NoPen), QColor("#d7e9df"));
+                scene.addRect(label->sceneBoundingRect().adjusted(-6, -2, 6, 2), QPen(Qt::NoPen), QColor("#254834"));
             bg->setZValue(1);
         }
         dlg.exec();
@@ -334,36 +364,53 @@ class Window : public QMainWindow
   public:
     Window()
     {
-        setStyleSheet(R"(
-            QMainWindow, QStackedWidget { background: #f3f2eb; color: #1d342c; }
-            QToolBar { background: #21493d; spacing: 3px; padding: 7px; border: none; }
-            QToolBar QToolButton { color: white; background: transparent; padding: 6px 9px; border-radius: 4px; }
-            QToolBar QToolButton:hover { background: #376354; }
-            QListWidget, QPlainTextEdit { background: #fffef9; color: #263a32; border: 1px solid #d9ded6; border-radius: 6px; }
-            QListWidget { padding: 5px; }
-            QListWidget::item { padding: 6px; }
-            QListWidget::item:selected { background: #d9e9df; color: #21493d; }
-            QPushButton { background: #e0ebe4; color: #21493d; padding: 7px 13px; border: 1px solid #c7d6cb; border-radius: 4px; }
-            QPushButton:hover { background: #cbded1; }
-        )");
-        resize(1000, 710);
+        resize(1120, 740);
         setCentralWidget(pages);
         pages->addWidget(shelf);
         auto *intro = new QVBoxLayout(shelf);
         intro->setContentsMargins(70, 45, 70, 45);
-        auto *brand = new QLabel("墨序");
-        brand->setStyleSheet("font: bold 36pt 'Microsoft YaHei';color:#244b3e");
-        intro->addWidget(brand);
+        intro->addWidget(new MatrixBanner("墨序 · 书架"));
         intro->addSpacing(18);
         intro->addWidget(new QLabel("最近书籍"));
         intro->addWidget(recent);
+        intro->addWidget(location);
+        location->setObjectName("hint");
         auto *actions = new QHBoxLayout;
         intro->addLayout(actions);
         button(actions, "新建书籍", [this] { newBook(); });
         button(actions, "打开书籍…",
                [this] { openBook(QFileDialog::getOpenFileName(this, "打开书籍", {}, "墨序书籍 (*.moxu)")); });
+        button(actions, "设置保存目录", [this] { chooseStorage(); });
         connect(recent, &QListWidget::itemActivated, this, [this](auto *i) { guard([&] { openBook(i->text()); }); });
-        auto *work = new QWidget;
+        pages->addWidget(storage);
+        auto *setup = new QVBoxLayout(storage);
+        setup->setContentsMargins(60, 40, 60, 40);
+        setup->setSpacing(18);
+        setup->addStretch();
+        setup->addWidget(new MatrixBanner("小说保存位置"));
+        setup->addWidget(directoryMessage);
+        auto *explanation = new QLabel("新书默认保存在这里。你可以随时从书架更改目录，已有书籍仍保留在原位置。");
+        explanation->setWordWrap(true);
+        setup->addWidget(explanation);
+        auto *choices = new QHBoxLayout;
+        setup->addLayout(choices);
+        button(choices, "使用默认目录", [this] { setDirectory(defaultBooksPath()); });
+        button(choices, "选择自定义目录…", [this] {
+            setDirectory(QFileDialog::getExistingDirectory(
+                this, "选择小说保存目录",
+                QSettings().value("booksDir", QCoreApplication::applicationDirPath()).toString()));
+        });
+        button(choices, "返回书架", [this] {
+            if (!QSettings().contains("booksDir"))
+            {
+                directoryMessage->setText("首次使用请先选择保存目录。默认目录  " +
+                                          QDir::toNativeSeparators(defaultBooksPath()));
+                return;
+            }
+            showShelf();
+        });
+        setup->addStretch();
+        auto *work = writer;
         pages->addWidget(work);
         auto *cols = new QHBoxLayout(work);
         auto *left = new QVBoxLayout;
@@ -383,13 +430,14 @@ class Window : public QMainWindow
         cols->addLayout(right, 4);
         right->addWidget(heading);
         right->addWidget(editor);
-        heading->setStyleSheet("font-size:20px;font-weight:bold;color:#244b3e");
+        heading->setObjectName("title");
+        editor->setObjectName("manuscript");
         editor->setFont(QFont("Microsoft YaHei", 13));
         editor->setPlaceholderText("从这里开始写作…");
         editor->document()->setDocumentMargin(26);
         tools = addToolBar("写作");
         tools->setMovable(false);
-        tool("书架", [this] { showShelf(); });
+        tool("返回资料工作区", [this] { enterDossier(); });
         tool("保存", [this] { save(); });
         tool("人物名字", [this] {
             auto id = person();
@@ -403,19 +451,8 @@ class Window : public QMainWindow
         tool("历史版本", [this] { history(); });
         auto *menu = new QMenu("资料与导出", this);
         auto action = [&](QString name, Action fn) { menu->addAction(name, this, [this, fn] { guard(fn); }); };
-        action("创建人物", [this] { editPerson(false); });
-        action("编辑人物资料", [this] { editPerson(true); });
-        action("新增关系", [this] {
-            auto a = person();
-            if (!a)
-                return;
-            auto b = person();
-            if (!b)
-                return;
-            auto label = ask("两人关系");
-            if (!label.isEmpty())
-                book->run("INSERT INTO relations(a,b,label) VALUES(?,?,?)", {a, b, label});
-        });
+        action("人物档案", [this] { enterDossier(1); });
+        action("人物关系", [this] { enterDossier(2); });
         action("新建输出模板", [this] {
             auto name = ask("模板名称");
             if (name.isEmpty())
@@ -501,13 +538,38 @@ class Window : public QMainWindow
         });
         timer.setSingleShot(true);
         connect(&timer, &QTimer::timeout, this, [this] { guard([this] { save(); }); });
-        connect(new QShortcut(QKeySequence::Save, this), &QShortcut::activated, this,
-                [this] { guard([this] { save(); }); });
+        connect(new QShortcut(QKeySequence::Save, this), &QShortcut::activated, this, [this] {
+            guard([this] {
+                if (pages->currentWidget() == dossier)
+                {
+                    dossier->flush();
+                    setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+                }
+                else
+                    save();
+            });
+        });
+        dossier = new Dossier(
+            [this] {
+                setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+                pages->setCurrentWidget(writer);
+                tools->show();
+                statusBar()->show();
+                editor->setFocus();
+            },
+            [this] { showShelf(); }, [this] { graph(); }, [this](QString n) { setWindowTitle(n + " · 墨序"); });
+        pages->addWidget(dossier);
         showShelf();
+        if (!QSettings().contains("booksDir"))
+            chooseStorage();
     }
     void closeEvent(QCloseEvent *e) override
     {
-        if (!guard([this] { save(); }))
+        if (!guard([this] {
+                if (pages->currentWidget() == dossier)
+                    dossier->flush();
+                save();
+            }))
             e->ignore();
         else
             e->accept();

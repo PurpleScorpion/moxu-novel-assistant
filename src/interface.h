@@ -1,0 +1,97 @@
+#pragma once
+#include <QtWidgets>
+
+inline void applyTheme(QApplication &app)
+{
+    app.setStyle("Fusion");
+    QPalette palette;
+    palette.setColor(QPalette::Window, QColor("#09120f"));
+    palette.setColor(QPalette::WindowText, QColor("#d9eae0"));
+    palette.setColor(QPalette::Text, QColor("#d9eae0"));
+    palette.setColor(QPalette::Base, QColor("#0d1c16"));
+    palette.setColor(QPalette::AlternateBase, QColor("#13271f"));
+    palette.setColor(QPalette::Button, QColor("#172c23"));
+    palette.setColor(QPalette::ButtonText, QColor("#d9eae0"));
+    palette.setColor(QPalette::Highlight, QColor("#a4f2aa"));
+    palette.setColor(QPalette::HighlightedText, QColor("#102817"));
+    app.setPalette(palette);
+    app.setFont(QFont("Microsoft YaHei UI", 11));
+    app.setStyleSheet(R"(
+    QWidget { selection-background-color:#a4f2aa; selection-color:#092014; }
+    QLabel#title {font-size:26px;font-weight:700;color:#dbf9df;}
+    QLabel#sectionTitle {font-size:17px;font-weight:600;color:#abefbc;}
+    QLabel#hint {color:#a0bcac;}
+    QFrame#rail {background:#0d1914;border-right:1px solid #294536;}
+    QPushButton,QToolButton {background:#162a21;border:1px solid #365443;border-radius:4px;padding:7px 12px;color:#dfefe4;}
+    QPushButton:hover,QToolButton:hover {background:#234634;border-color:#68bd83;}
+    QPushButton#primary {background:#a3eeb1;color:#102417;border-color:#a3eeb1;font-weight:600;}
+    QListWidget,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QTableWidget {background:#101f19;border:1px solid #345140;border-radius:4px;padding:6px;}
+    QListWidget::item {padding:8px;}
+    QListWidget::item:selected {background:#254834;color:#bcffca;}
+    QListWidget#navigation {border:none;background:transparent;padding:0;}
+    QToolBar {spacing:3px;background:#0e1c15;padding:5px;border-bottom:1px solid #294536;}
+    QToolBar QToolButton {border:none;}
+    QMenu {padding:4px;background:#112019;border:1px solid #48634f;}
+    QMenu::item {padding:7px 18px;} QMenu::item:selected {background:#284f36;}
+    QHeaderView::section {background:#193324;color:#c7e9ce;padding:8px;border:none;}
+    QStatusBar {color:#a7cfb3;}
+    )");
+}
+
+class MatrixBanner : public QWidget
+{
+    QString title;
+
+  public:
+    explicit MatrixBanner(QString text) : title(std::move(text))
+    {
+        setMinimumHeight(96);
+    }
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#10251a"));
+        p.setFont(QFont("Consolas", 11));
+        const QString glyphs = "01ｱｲｳｴｵ01";
+        for (int x = width() / 2; x < width(); x += 15)
+            for (int y = 0; y < height() + 15; y += 16)
+            {
+                int seed = (x * 3 + y * 13 + x * y / 11) % 91;
+                if (seed < 27)
+                    continue;
+                p.setPen(QColor(68, 222, 111, seed + 15));
+                p.drawText(x, y, glyphs.mid(seed % glyphs.size(), 1));
+            }
+        p.fillRect(0, 0, 3, height(), QColor("#9aefaa"));
+        p.setPen(QColor("#baf6c5"));
+        p.setFont(QFont("Microsoft YaHei UI", 23, QFont::Bold));
+        QRect textRect = rect().adjusted(24, 5, -20, -5);
+        p.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
+                   p.fontMetrics().elidedText(title, Qt::ElideRight, textRect.width()));
+    }
+};
+
+class DialogSizing : public QObject
+{
+    bool eventFilter(QObject *o, QEvent *event) override
+    {
+        auto *dlg = qobject_cast<QDialog *>(o);
+        if (dlg && event->type() == QEvent::Show)
+        {
+            const auto bounds = dlg->screen()->availableGeometry().size();
+            int w = qMin(580, bounds.width() - 32), h = qMin(200, bounds.height() - 48);
+            if (auto *layout = dlg->layout())
+                layout->setSizeConstraint(QLayout::SetDefaultConstraint);
+            dlg->setMinimumSize(dlg->minimumSize().expandedTo(QSize(w, h)).boundedTo(bounds));
+            dlg->resize(dlg->size().expandedTo(dlg->minimumSize()));
+            if (auto *label = dlg->findChild<QLabel *>("qt_msgbox_label"))
+                label->setMinimumWidth(qMax(180, w - 140));
+        }
+        return false;
+    }
+};
+
+inline QString defaultBooksPath()
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath("书籍");
+}

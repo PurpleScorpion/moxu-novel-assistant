@@ -79,6 +79,12 @@ Book::Book(const QString &path, const QString &newTitle)
             });
         if (value("SELECT format FROM meta").toInt() != 1)
             fail("无法识别此版本的墨序书籍。");
+        if (!value("SELECT 1 FROM sqlite_master WHERE type='table' AND name='book_profile'").isValid())
+            atomic([&] {
+                run("CREATE TABLE IF NOT EXISTS book_profile(id INTEGER PRIMARY KEY CHECK(id=1),genre TEXT NOT "
+                    "NULL,synopsis TEXT NOT NULL)");
+                run("INSERT OR IGNORE INTO book_profile VALUES(1,'','')");
+            });
     }
     catch (...)
     {
