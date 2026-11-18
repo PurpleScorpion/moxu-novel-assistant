@@ -95,7 +95,9 @@ int main(int argc, char **argv)
         check(preview()->toPlainText() == "苏禾 / 金丹 / 0", "切换后预览错误");
         preview()->setPlainText("取消草稿");
         click(sheet(), "查看章节快照");
-        check(editor->isVisible() && sheet().findChild<QTextBrowser *>("snapshotReport")->isVisible(),
+        auto *sideBalances = sheet().findChild<QTableWidget *>("snapshotBalances");
+        check(editor->isVisible() && sideBalances && sideBalances->isVisible() &&
+                  sideBalances->horizontalHeaderItem(1)->text() == "余额" && sideBalances->showGrid(),
               "查阅人物快照离开了正文");
         click(sheet(), "返回属性面板");
         check(preview()->toPlainText() == "取消草稿", "查看快照后丢失面板草稿");
@@ -438,17 +440,38 @@ int main(int argc, char **argv)
         check(tabs, "缺少人物档案标签页");
         tabs->setCurrentIndex(1);
         auto *snapshotChapter = tabs->findChild<QComboBox *>("snapshotChapter");
-        auto *report = tabs->findChild<QTextBrowser *>("snapshotReport");
-        check(report->isVisible(), "未显示章节快照");
+        auto *balances = tabs->findChild<QTableWidget *>("snapshotBalances");
+        auto *items = tabs->findChild<QTableWidget *>("snapshotItems");
+        auto *supplies = tabs->findChild<QTableWidget *>("snapshotSupplies");
+        auto *skills = tabs->findChild<QTableWidget *>("snapshotSkills");
+        check(balances && items && supplies && skills && skills->isVisible() &&
+                  skills->horizontalHeaderItem(3)->text() == "剩余次数",
+              "章节快照表头缺失");
+        auto tableRow = [](QTableWidget *table, const QString &name) {
+            QStringList cells;
+            for (int r = 0; r < table->rowCount(); ++r)
+                if (table->item(r, 0) && table->item(r, 0)->text() == name)
+                {
+                    for (int c = 0; c < table->columnCount(); ++c)
+                        if (auto *cell = table->item(r, c))
+                            cells << cell->text();
+                    break;
+                }
+            return cells;
+        };
         snapshotChapter->setCurrentIndex(0);
-        auto first = report->toPlainText();
-        check(first.contains("上清仙法") && first.contains("第二重") && first.contains("一日") &&
-                  first.contains("12") && !first.contains("蓝瓶") && !first.contains("盘古幡"),
+        check(tableRow(skills, "上清仙法") == QStringList{"上清仙法", "第二重", "一日", "3"} &&
+                  tableRow(balances, "灵石") == QStringList{"灵石", "12"} &&
+                  tableRow(supplies, "无") == QStringList{"无"} && supplies->columnSpan(0, 0) == 2 &&
+                  tableRow(items, "盘古幡").isEmpty(),
               "第一章人物快照不符");
         snapshotChapter->setCurrentIndex(1);
-        check(report->toPlainText().contains("蓝瓶") && report->toPlainText().contains("22"), "第二章库存或收支未更新");
+        check(tableRow(supplies, "蓝瓶") == QStringList{"蓝瓶", "3"} && supplies->columnSpan(0, 0) == 1 &&
+                  tableRow(balances, "灵石") == QStringList{"灵石", "22"},
+              "第二章库存或收支未更新");
         window.findChild<QListWidget *>("personList")->setCurrentRow(1);
-        check(report->toPlainText().contains("盘古幡") && !report->toPlainText().contains("上清仙法"), "快照串用人物");
+        check(tableRow(items, "盘古幡") == QStringList{"盘古幡"} && tableRow(skills, "上清仙法").isEmpty(),
+              "快照串用人物");
         nav->setCurrentRow(2);
         click(window, "查看关系图");
         check(nav->isVisible() && !visible<QGraphicsView>(window).isEmpty(), "资料关系图跳出了侧栏");
