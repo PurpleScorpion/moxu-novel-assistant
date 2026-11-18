@@ -1,5 +1,6 @@
 #pragma once
 #include "dossier.h"
+#include "writer_sheet.h"
 #include "writing_assistant.h"
 #include <QtWidgets>
 #include <cmath>
@@ -20,14 +21,40 @@ class Window : public QMainWindow
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
     QLabel *status = new QLabel;
+    QHBoxLayout *writerColumns;
+    WriterSheet *sheet = nullptr;
+    QTextCursor insertion;
+    QString bookPath;
     QTimer timer;
     QToolBar *tools;
     int chapter = 0;
     bool dirty = false;
     QHash<QString, QString> sessionKeys;
 
+    void closeSheet()
+    {
+        if (!sheet)
+            return;
+        sheet->hide();
+        writerColumns->removeWidget(sheet);
+        sheet->deleteLater();
+        sheet = nullptr;
+        editor->setReadOnly(false);
+        editor->setTextCursor(insertion);
+        insertion = QTextCursor();
+        editor->setFocus();
+    }
+    void beginSheet(const QString &title)
+    {
+        closeSheet();
+        insertion = editor->textCursor();
+        editor->setReadOnly(true);
+        sheet = new WriterSheet(title, [this] { closeSheet(); });
+        writerColumns->addWidget(sheet, 3);
+    }
     void aiWriting()
     {
+        closeSheet();
         save();
         auto target = editor->textCursor();
         QString excerpt =
@@ -64,7 +91,14 @@ class Window : public QMainWindow
         }
         catch (const std::exception &e)
         {
-            QMessageBox::warning(this, "墨序", QString::fromUtf8(e.what()));
+            const QString error = QString::fromUtf8(e.what());
+            if (sheet)
+                sheet->report(error);
+            else
+            {
+                statusBar()->show();
+                statusBar()->showMessage(error, 12000);
+            }
             return false;
         }
     }
@@ -82,28 +116,23 @@ class Window : public QMainWindow
     {
         return QInputDialog::getText(this, "墨序", label, QLineEdit::Normal, initial).trimmed();
     }
-    int pick(const QString &title, const QString &sql)
+    QComboBox *personChoice()
     {
-        auto rows = book->run(sql);
-        QStringList choices;
-        QVector<int> ids;
-        while (rows.next())
-        {
-            ids << rows.value(0).toInt();
-            choices << QString("%1  ·  #%2").arg(rows.value(1).toString()).arg(ids.last());
-        }
-        if (choices.isEmpty())
-        {
-            QMessageBox::information(this, title, "请先建立相关资料。");
-            return 0;
-        }
-        bool ok = false;
-        auto choice = QInputDialog::getItem(this, title, "选择条目", choices, 0, false, &ok);
-        return ok ? ids.at(choices.indexOf(choice)) : 0;
+        auto *people = sheet->choice("人物", book->run("SELECT id,name FROM people ORDER BY name,id"));
+        if (!people->count())
+            sheet->report("请先在资料工作区建立人物档案。");
+        return people;
     }
-    int person()
+    void insertPerson()
     {
-        return pick("选择人物", "SELECT id,name FROM people ORDER BY name,id");
+        beginSheet("插入人物名字");
+        auto *people = personChoice();
+        button(sheet->form, "插入姓名", [this, people] {
+            if (people->currentIndex() < 0)
+                return;
+            insertion.insertText(book->value("SELECT name FROM people WHERE id=?", {people->currentData()}).toString());
+            closeSheet();
+        });
     }
     void save()
     {
@@ -118,6 +147,7 @@ class Window : public QMainWindow
         auto q = book->run("SELECT title,body FROM chapters WHERE id=?", {id});
         if (!q.next())
             throw std::runtime_error("找不到章节");
+        closeSheet();
         chapter = id;
         QSignalBlocker noEdit(editor);
         heading->setText(q.value(0).toString());
@@ -164,6 +194,7 @@ class Window : public QMainWindow
             addChapterItem(q.value(0).toInt(), q.value(1).toString());
         if (!chapters->count())
             throw std::runtime_error("书籍没有章节");
+        bookPath = QFileInfo(path).absoluteFilePath();
         book = std::move(next);
         lock = std::move(candidate);
         chapters->setCurrentRow(0);
@@ -192,6 +223,7 @@ class Window : public QMainWindow
     void enterDossier(int page = 0)
     {
         save();
+        closeSheet();
         dossier->enter(book.get(), page);
         setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
         pages->setCurrentWidget(dossier);
@@ -232,55 +264,70 @@ class Window : public QMainWindow
     }
     void record()
     {
-        int id = person();
-        if (!id)
-            return;
-        auto resource = ask("资源名", "积分");
-        if (resource.isEmpty())
-            return;
-        bool ok = false;
-        int delta =
-            QInputDialog::getInt(this, "资源变化", "收入填正数，支出填负数", 0, -1000000000, 1000000000, 1, &ok);
-        if (!ok)
-            return;
-        auto desc = ask("事件描述");
-        if (desc.isEmpty())
-            return;
-        auto choice = QMessageBox::question(this, "确认事件",
-                                            QString("%1：%2 → %3\n同时将事件插入正文？")
-                                                .arg(resource)
-                                                .arg(book->balance(id, resource, chapter))
-                                                .arg(book->balance(id, resource, chapter) + delta),
-                                            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
-        if (choice == QMessageBox::Cancel)
-            return;
-        save();
-        if (choice == QMessageBox::No)
-        {
-            book->event(chapter, id, resource, delta, desc);
-            return;
-        }
-        QString snippet = QString("%1（%2%3%4，剩余%5）")
-                              .arg(desc, resource, delta >= 0 ? "+" : "")
-                              .arg(delta)
-                              .arg(book->balance(id, resource, chapter) + delta);
-        auto cursor = editor->textCursor();
-        QString body = editor->toPlainText();
-        body.replace(cursor.selectionStart(), cursor.selectionEnd() - cursor.selectionStart(), snippet);
-        book->event(chapter, id, resource, delta, desc, &body);
-        cursor.insertText(snippet);
-        editor->setTextCursor(cursor);
-        dirty = false;
-        status->setText("事件和正文已保存");
+        beginSheet("记录事件");
+        auto *people = personChoice();
+        auto *resource = sheet->field("资源名", "积分");
+        sheet->form->addWidget(new QLabel("变动数额（收入为正，支出为负）"));
+        auto *delta = new QSpinBox;
+        delta->setRange(-1000000000, 1000000000);
+        sheet->form->addWidget(delta);
+        auto *description = sheet->field("事件描述");
+        auto *insert = new QCheckBox("同时插入本章正文");
+        insert->setChecked(true);
+        sheet->form->addWidget(insert);
+        auto *preview = sheet->textArea("余额与正文预览", true);
+        preview->setMaximumHeight(110);
+        auto refresh = [=, this] {
+            guard([&] {
+                if (people->currentIndex() < 0 || resource->text().trimmed().isEmpty())
+                {
+                    preview->clear();
+                    return;
+                }
+                QString unit = resource->text().trimmed();
+                sheet->report({});
+                auto balance = book->balance(people->currentData().toInt(), unit, chapter);
+                QString text = QString("%1：%2 → %3").arg(unit).arg(balance).arg(balance + delta->value());
+                if (insert->isChecked())
+                    text += "\n\n" + eventText(description->text().trimmed(), unit, delta->value(), balance);
+                preview->setPlainText(text);
+            });
+        };
+        connect(people, &QComboBox::currentIndexChanged, sheet, refresh);
+        connect(delta, &QSpinBox::valueChanged, sheet, refresh);
+        connect(resource, &QLineEdit::textChanged, sheet, refresh);
+        connect(description, &QLineEdit::textChanged, sheet, refresh);
+        connect(insert, &QCheckBox::toggled, sheet, refresh);
+        refresh();
+        button(sheet->form, "保存事件", [=, this] {
+            const int id = people->currentData().toInt();
+            const auto unit = resource->text().trimmed(), desc = description->text().trimmed();
+            if (!id || unit.isEmpty() || desc.isEmpty())
+                throw std::runtime_error("请选择人物，并填写资源名和事件描述。");
+            save();
+            if (insert->isChecked())
+            {
+                auto snippet = eventText(desc, unit, delta->value(), book->balance(id, unit, chapter));
+                auto body = editor->toPlainText();
+                body.replace(insertion.selectionStart(), insertion.selectionEnd() - insertion.selectionStart(),
+                             snippet);
+                book->event(chapter, id, unit, delta->value(), desc, &body);
+                insertion.insertText(snippet);
+                dirty = false;
+            }
+            else
+                book->event(chapter, id, unit, delta->value(), desc);
+            status->setText(insert->isChecked() ? "事件和正文已保存" : "事件已保存");
+            closeSheet();
+        });
     }
-    void panel()
+    static QString eventText(const QString &description, const QString &unit, int delta, qint64 before)
     {
-        int id = person();
-        if (!id)
-            return;
-        int t = pick("选择输出模板", "SELECT id,title FROM templates");
-        if (!t)
-            return;
+        return QString("%1（%2%3%4，剩余%5）")
+            .arg(description, unit, delta >= 0 ? "+" : "", QString::number(delta), QString::number(before + delta));
+    }
+    QString renderPanel(int id, int t)
+    {
         auto pattern = book->value("SELECT pattern FROM templates WHERE id=?", {t}).toString();
         auto q = book->run("SELECT name,attributes FROM people WHERE id=?", {id});
         q.next();
@@ -304,21 +351,37 @@ class Window : public QMainWindow
             start = m.capturedEnd();
         }
         result += pattern.mid(start);
-        bool ok = false;
-        result = QInputDialog::getMultiLineText(this, "插入面板", "预览并插入本章正文", result, &ok);
-        if (ok)
-            editor->insertPlainText(result);
+        return result;
+    }
+    void panel()
+    {
+        beginSheet("属性面板");
+        auto *people = personChoice();
+        auto *templates = sheet->choice("输出模板", book->run("SELECT id,title FROM templates ORDER BY id"));
+        auto *preview = sheet->textArea("预览（可直接编辑）");
+        auto refresh = [=, this] {
+            guard([&] {
+                preview->setPlainText(people->count() && templates->count()
+                                          ? renderPanel(people->currentData().toInt(), templates->currentData().toInt())
+                                          : QString());
+            });
+        };
+        connect(people, &QComboBox::currentIndexChanged, sheet, refresh);
+        connect(templates, &QComboBox::currentIndexChanged, sheet, refresh);
+        refresh();
+        button(sheet->form, "插入属性面板", [=, this] {
+            if (!people->count() || !templates->count() || preview->toPlainText().isEmpty())
+                throw std::runtime_error("请先选择人物和模板，并填写插入内容。");
+            insertion.insertText(preview->toPlainText());
+            closeSheet();
+        });
     }
     void showText(const QString &title, const QString &text)
     {
-        QDialog dlg(this);
-        dlg.setWindowTitle(title);
-        dlg.resize(620, 460);
-        QVBoxLayout layout(&dlg);
-        QPlainTextEdit view(text);
-        view.setReadOnly(true);
-        layout.addWidget(&view);
-        dlg.exec();
+        beginSheet(title);
+        auto *view = new QPlainTextEdit(text);
+        view->setReadOnly(true);
+        sheet->form->addWidget(view, 1);
     }
     void timeline()
     {
@@ -334,14 +397,29 @@ class Window : public QMainWindow
     }
     void graph()
     {
-        QDialog dlg(this);
-        dlg.setWindowTitle("人物关系图");
-        dlg.resize(760, 550);
-        QVBoxLayout layout(&dlg);
-        QGraphicsScene scene;
-        QGraphicsView view(&scene);
-        view.setRenderHint(QPainter::Antialiasing);
-        layout.addWidget(&view);
+        QGraphicsView *view = new QGraphicsView;
+        auto *ownedScene = new QGraphicsScene(view);
+        view->setScene(ownedScene);
+        auto &scene = *ownedScene;
+        view->setRenderHint(QPainter::Antialiasing);
+        if (pages->currentWidget() == writer)
+        {
+            beginSheet("人物关系图");
+            sheet->form->addWidget(view, 1);
+        }
+        else
+        {
+            auto *page = new QWidget;
+            auto *layout = new QVBoxLayout(page);
+            layout->addWidget(view, 1);
+            button(layout, "返回人物关系", [this, page] {
+                pages->setCurrentWidget(dossier);
+                pages->removeWidget(page);
+                page->deleteLater();
+            });
+            pages->addWidget(page);
+            pages->setCurrentWidget(page);
+        }
         auto q = book->run("SELECT id,name FROM people ORDER BY id");
         QVector<QPair<int, QString>> people;
         while (q.next())
@@ -373,23 +451,146 @@ class Window : public QMainWindow
                 scene.addRect(label->sceneBoundingRect().adjusted(-6, -2, 6, 2), QPen(Qt::NoPen), QColor("#254834"));
             bg->setZValue(1);
         }
-        dlg.exec();
+        view->setMinimumHeight(240);
     }
     void history()
     {
         save();
-        auto id = pick("恢复章节历史", QString("SELECT id,datetime(stamp,'localtime') || '  ' || substr(body,1,28) "
-                                               "FROM revisions WHERE chapter=%1 ORDER BY id DESC")
-                                           .arg(chapter));
-        if (!id)
-            return;
-        auto text = book->value("SELECT body FROM revisions WHERE id=?", {id}).toString();
-        showText("历史正文预览", text);
-        if (QMessageBox::question(this, "恢复", "将此版本恢复为当前正文？") == QMessageBox::Yes)
+        beginSheet("历史版本");
+        auto rows = book->run("SELECT id,datetime(stamp,'localtime') || '  ' || substr(body,1,28) FROM revisions WHERE "
+                              "chapter=? ORDER BY id DESC",
+                              {chapter});
+        auto *versions = sheet->choice("选择版本", std::move(rows));
+        if (!versions->count())
         {
-            editor->setPlainText(text);
-            save();
+            sheet->report("本章尚无历史版本。");
+            return;
         }
+        auto *preview = sheet->textArea("历史正文预览", true);
+        auto refresh = [=, this] {
+            guard([&] {
+                preview->setPlainText(
+                    book->value("SELECT body FROM revisions WHERE id=?", {versions->currentData()}).toString());
+            });
+        };
+        connect(versions, &QComboBox::currentIndexChanged, sheet, refresh);
+        refresh();
+        button(sheet->form, "用此版本恢复本章", [=, this] {
+            auto text =
+                book->value("SELECT body FROM revisions WHERE id=? AND chapter=?", {versions->currentData(), chapter})
+                    .toString();
+            book->atomic([&] { book->save(chapter, text); });
+            closeSheet();
+            loadChapter(chapter);
+        });
+    }
+
+    void proofread()
+    {
+        save();
+        QStringList issues;
+        auto query = book->run("SELECT title,body FROM chapters ORDER BY id");
+        QRegularExpression repeated("[，。；、]{2,}");
+        while (query.next())
+        {
+            auto lines = query.value(1).toString().split('\n');
+            for (qsizetype i = 0; i < lines.size(); ++i)
+            {
+                auto hits = repeated.globalMatch(lines.at(i));
+                while (hits.hasNext())
+                    issues << QString("%1，第 %2 行：请核对标点 %3")
+                                  .arg(query.value(0).toString())
+                                  .arg(i + 1)
+                                  .arg(hits.next().captured());
+            }
+        }
+        showText("整书基础校对 · 重复标点",
+                 issues.isEmpty() ? "未发现连续的逗号、句号、分号或顿号。" : issues.join("\n"));
+    }
+    void newTemplate()
+    {
+        beginSheet("新建输出模板");
+        auto *name = sheet->field("模板名称");
+        auto *pattern = sheet->textArea("模板内容（可用 {{姓名}}、{{积分}} 或 {{自定义属性名}}）");
+        pattern->setPlainText("【{{姓名}}】\n{{属性}}");
+        button(sheet->form, "保存模板", [=, this] {
+            if (name->text().trimmed().isEmpty() || pattern->toPlainText().isEmpty())
+                throw std::runtime_error("请填写模板名称和内容。");
+            book->run("INSERT INTO templates(title,pattern) VALUES(?,?)",
+                      {name->text().trimmed(), pattern->toPlainText()});
+            closeSheet();
+            status->setText("模板已保存");
+        });
+    }
+    void fileOutput(bool backup)
+    {
+        beginSheet(backup ? "备份整本书" : "导出全书 TXT");
+        auto *model = new QFileSystemModel(sheet);
+        model->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Drives);
+        model->setRootPath("");
+        auto *dirs = new QTreeView;
+        dirs->setModel(model);
+        dirs->setHeaderHidden(true);
+        for (int c = 1; c < model->columnCount(); ++c)
+            dirs->hideColumn(c);
+        sheet->form->addWidget(new QLabel("目标目录"));
+        sheet->form->addWidget(dirs, 1);
+        QFileInfo source(bookPath);
+        auto index = model->index(source.absolutePath());
+        dirs->setCurrentIndex(index);
+        dirs->scrollTo(index);
+        auto filename = source.completeBaseName() +
+                        (backup ? QDateTime::currentDateTime().toString("-yyyyMMdd-HHmmss") + ".moxu" : ".txt");
+        auto *path = sheet->field("保存路径", QDir::toNativeSeparators(source.dir().filePath(filename)));
+        connect(dirs, &QTreeView::clicked, sheet, [=](const QModelIndex &index) {
+            auto name = QFileInfo(path->text()).fileName();
+            path->setText(
+                QDir::toNativeSeparators(QDir(model->filePath(index)).filePath(name.isEmpty() ? filename : name)));
+        });
+        auto *overwrite = new QCheckBox("覆盖此路径已有的 TXT 文件");
+        sheet->form->addWidget(overwrite);
+        auto refresh = [=] {
+            overwrite->setChecked(false);
+            overwrite->setVisible(!backup && QFileInfo::exists(path->text()));
+        };
+        connect(path, &QLineEdit::textChanged, sheet, refresh);
+        refresh();
+        button(sheet->form, backup ? "保存备份" : "导出文本", [=, this] {
+            auto target = QDir::fromNativeSeparators(path->text());
+            if (!QDir::isAbsolutePath(target))
+                throw std::runtime_error("请填写完整的保存路径。");
+            save();
+            if (backup)
+            {
+                if (QFileInfo::exists(target))
+                    throw std::runtime_error("该备份已存在，请在保存路径中更改文件名。");
+                book->run("VACUUM INTO ?", {target});
+            }
+            else
+            {
+                if (!target.endsWith(".txt", Qt::CaseInsensitive))
+                    throw std::runtime_error("请使用 .txt 文件后缀。");
+                if (QFileInfo::exists(target) && !overwrite->isChecked())
+                {
+                    overwrite->show();
+                    throw std::runtime_error("目标文件已存在，请改名或勾选覆盖。");
+                }
+                QSaveFile file(target);
+                if (!file.open(QIODevice::WriteOnly))
+                    throw std::runtime_error("无法打开导出文件。");
+                auto q = book->run("SELECT title,body FROM chapters ORDER BY id");
+                while (q.next())
+                {
+                    auto bytes = (q.value(0).toString() + "\n\n" + q.value(1).toString() + "\n\n").toUtf8();
+                    if (file.write(bytes) != bytes.size())
+                        throw std::runtime_error("写入失败。");
+                }
+                if (!file.commit())
+                    throw std::runtime_error("导出失败。");
+            }
+            closeSheet();
+            status->setText(backup ? "已保存书籍备份" : "全书 TXT 已导出");
+        });
     }
 
   public:
@@ -443,19 +644,25 @@ class Window : public QMainWindow
         setup->addStretch();
         auto *work = writer;
         pages->addWidget(work);
-        auto *cols = new QHBoxLayout(work);
+        writerColumns = new QHBoxLayout(work);
+        auto *cols = writerColumns;
         auto *left = new QVBoxLayout;
         cols->addLayout(left, 1);
         left->addWidget(new QLabel("章节目录"));
         left->addWidget(chapters);
         button(left, "＋ 新章节", [this] {
             save();
-            auto name = ask("章节名");
-            if (name.isEmpty())
-                return;
-            auto id = book->run("INSERT INTO chapters(title) VALUES(?)", {name}).lastInsertId().toInt();
-            addChapterItem(id, name);
-            chapters->setCurrentRow(chapters->count() - 1);
+            beginSheet("新建章节");
+            auto *name = sheet->field("章节名");
+            name->setFocus();
+            button(sheet->form, "创建章节", [this, name] {
+                QString title = name->text().trimmed();
+                if (title.isEmpty())
+                    throw std::runtime_error("请填写章节名。");
+                auto id = book->run("INSERT INTO chapters(title) VALUES(?)", {title}).lastInsertId().toInt();
+                addChapterItem(id, title);
+                chapters->setCurrentRow(chapters->count() - 1);
+            });
         });
         auto *right = new QVBoxLayout;
         cols->addLayout(right, 4);
@@ -471,86 +678,21 @@ class Window : public QMainWindow
         tool("返回资料工作区", [this] { enterDossier(); });
         tool("保存", [this] { save(); });
         tool("AI 写作", [this] { aiWriting(); });
-        tool("人物名字", [this] {
-            auto id = person();
-            if (id)
-                editor->insertPlainText(book->value("SELECT name FROM people WHERE id=?", {id}).toString());
-        });
+        tool("人物名字", [this] { insertPerson(); });
         tool("属性面板", [this] { panel(); });
         tool("记录事件", [this] { record(); });
         tool("时间轴", [this] { timeline(); });
         tool("关系图", [this] { graph(); });
         tool("历史版本", [this] { history(); });
-        auto *menu = new QMenu("资料与导出", this);
-        auto action = [&](QString name, Action fn) { menu->addAction(name, this, [this, fn] { guard(fn); }); };
-        action("人物档案", [this] { enterDossier(1); });
-        action("人物关系", [this] { enterDossier(2); });
-        action("新建输出模板", [this] {
-            auto name = ask("模板名称");
-            if (name.isEmpty())
-                return;
-            bool ok = false;
-            auto pattern = QInputDialog::getMultiLineText(
-                this, "输出模板", "可使用 {{姓名}}、{{积分}} 或 {{自定义属性名}}", "【{{姓名}}】\n{{属性}}", &ok);
-            if (ok && !pattern.isEmpty())
-                book->run("INSERT INTO templates(title,pattern) VALUES(?,?)", {name, pattern});
+        tool("资料与导出", [this] {
+            beginSheet("资料与导出");
+            button(sheet->form, "人物档案", [this] { enterDossier(1); });
+            button(sheet->form, "人物关系", [this] { enterDossier(2); });
+            button(sheet->form, "新建输出模板", [this] { newTemplate(); });
+            button(sheet->form, "整书基础校对", [this] { proofread(); });
+            button(sheet->form, "备份整本书…", [this] { fileOutput(true); });
+            button(sheet->form, "导出全书 TXT", [this] { fileOutput(false); });
         });
-        action("整书基础校对", [this] {
-            save();
-            QStringList issues;
-            auto query = book->run("SELECT title,body FROM chapters ORDER BY id");
-            QRegularExpression repeated("[，。；、]{2,}");
-            while (query.next())
-            {
-                auto lines = query.value(1).toString().split('\n');
-                for (qsizetype i = 0; i < lines.size(); ++i)
-                {
-                    auto hits = repeated.globalMatch(lines.at(i));
-                    while (hits.hasNext())
-                        issues << QString("%1，第 %2 行：请核对标点 %3")
-                                      .arg(query.value(0).toString())
-                                      .arg(i + 1)
-                                      .arg(hits.next().captured());
-                }
-            }
-            showText("整书基础校对 · 重复标点",
-                     issues.isEmpty() ? "未发现连续的逗号、句号、分号或顿号。" : issues.join("\n"));
-        });
-        action("备份整本书…", [this] {
-            save();
-            auto path = QFileDialog::getSaveFileName(this, "保存独立备份", {}, "墨序书籍 (*.moxu)");
-            if (path.isEmpty())
-                return;
-            if (QFileInfo::exists(path))
-                throw std::runtime_error("请选择尚不存在的备份文件名。");
-            book->run("VACUUM INTO ?", {path});
-            status->setText("已保存书籍备份");
-        });
-        action("导出全书 TXT", [this] {
-            save();
-            auto path = QFileDialog::getSaveFileName(this, "导出全书", {}, "文本文件 (*.txt)");
-            if (path.isEmpty())
-                return;
-            if (!path.endsWith(".txt", Qt::CaseInsensitive))
-                throw std::runtime_error("导出文件请使用 .txt 后缀。");
-            QSaveFile file(path);
-            if (!file.open(QIODevice::WriteOnly))
-                throw std::runtime_error("无法打开导出文件");
-            auto q = book->run("SELECT title,body FROM chapters ORDER BY id");
-            while (q.next())
-            {
-                auto bytes = (q.value(0).toString() + "\n\n" + q.value(1).toString() + "\n\n").toUtf8();
-                if (file.write(bytes) != bytes.size())
-                    throw std::runtime_error("写入失败");
-            }
-            if (!file.commit())
-                throw std::runtime_error("导出失败");
-        });
-        auto *more = new QToolButton;
-        more->setText("资料与导出");
-        more->setMenu(menu);
-        more->setPopupMode(QToolButton::InstantPopup);
-        tools->addWidget(more);
         statusBar()->addPermanentWidget(status);
         connect(chapters, &QListWidget::currentItemChanged, this, [this](auto *item, auto *prev) {
             if (item && !guard([&] {
