@@ -51,6 +51,13 @@ int main(int argc, char **argv)
         }
         QSettings().setValue("recent", QStringList{path});
         QSettings().setValue("booksDir", dir.path());
+        QSettings().setValue(
+            "aiSites/deepseek",
+            QByteArray(R"({"name":"DeepSeek","address":"https://api.deepseek.com","models":["deepseek-flash"]})"));
+        const auto oldDeepSeek = aiSites().first();
+        require(!oldDeepSeek.messagesApi() && oldDeepSeek.models == QStringList{"deepseek-flash"} &&
+                    oldDeepSeek.endpoint() == QUrl("https://api.deepseek.com/chat/completions"),
+                "旧版 DeepSeek 配置不兼容");
         Window window;
         window.show();
         QTcpServer server;
@@ -89,14 +96,28 @@ int main(int argc, char **argv)
         require(window.findChild<QLabel *>("siteNotice")->text().contains("已保存"), "站点未保存");
         click(window, "新增站点");
         window.findChild<QLineEdit *>("siteName")->setText("测试站点");
+        auto *protocol = window.findChild<QComboBox *>("siteProtocol");
+        protocol->setCurrentIndex(protocol->findData("messages"));
         address->setText("https://example.org/v1");
         modelField->setPlainText("model-a\nmodel-b");
         click(window, "保存配置");
         require(siteList->currentItem()->text() == "测试站点" &&
                     aiSites().last().models == QStringList{"model-a", "model-b"},
                 "新增站点或模型未保存");
+        const auto custom = aiSites().last();
+        QNetworkRequest customRequest(custom.endpoint());
+        custom.setHeaders(customRequest, "test-only");
+        require(custom.protocol == "messages" && custom.endpoint().path() == "/v1/messages" &&
+                    customRequest.rawHeader("x-api-key") == "test-only" && !customRequest.hasRawHeader("Authorization"),
+                "自定义站点的 Messages 协议或密钥认证未保存");
         siteList->setCurrentItem(siteList->findItems("智谱 GLM（国内）", Qt::MatchExactly).first());
         address->setText(QString("http://127.0.0.1:%1/v1").arg(port));
+        click(window, "保存配置");
+        siteList->setCurrentItem(siteList->findItems("Z.AI（ZCode 接口）", Qt::MatchExactly).first());
+        require(protocol->currentData() == "messages-bearer" && address->text() == "https://api.z.ai/api/anthropic",
+                "ZCode 预设协议或地址错误");
+        address->setText(QString("http://127.0.0.1:%1/api/anthropic").arg(port));
+        siteKey->setText("local-only-test");
         click(window, "保存配置");
         siteList->setCurrentItem(siteList->findItems("本机兼容服务", Qt::MatchExactly).first());
         click(window, "返回");
@@ -162,9 +183,13 @@ int main(int argc, char **argv)
                 if (wire.size() - split - 4 < length)
                     return;
                 const auto request = QJsonDocument::fromJson(wire.mid(split + 4)).object();
+                const bool messages = wire.startsWith("POST /api/anthropic/v1/messages ");
                 if (!request["stream"].toBool())
                 {
                     QByteArray response = R"({"choices":[{"message":{"content":"OK"}}]})";
+                    if (messages)
+                        response =
+                            R"({"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"OK"}]})";
                     if (request["model"].toString() == "glm-5.3")
                     {
                         if (request["thinking"].toObject()["type"].toString() == "disabled")
@@ -183,6 +208,15 @@ int main(int argc, char **argv)
                 }
                 QByteArray response = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\r\n\r\ndata: "
                                       "{\"choices\":[{\"delta\":{\"content\":\"山门前\"}}]}\n\ndata: [DONE]\n\n";
+                if (messages)
+                    response =
+                        R"(data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"内部思考"}}
+
+data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"山门开了。"}}
+
+data: {"type":"message_stop"}
+
+)";
                 int cut = response.indexOf("山") + 1;
                 socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " +
                               QByteArray::number(response.size()) + "\r\nConnection: close\r\n\r\n" +
@@ -215,6 +249,21 @@ int main(int argc, char **argv)
         service->hidePopup();
         service->setCurrentIndex(service->findData("zai"));
         require(models->findText("glm-5.2") >= 0, "切换站点后模型未更新");
+        service->setCurrentIndex(service->findData("zai-messages"));
+        click(window, "测试连接");
+        require(waitStatus("连接成功") && wire.contains("Bearer local-only-test") &&
+                    wire.toLower().contains("anthropic-version: 2023-06-01") && !wire.contains("少用副词") &&
+                    !wire.contains("山下"),
+                "Anthropic 测试接口、认证或外发范围错误");
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪") && visible<QPlainTextEdit>(window)->toPlainText() == "山门开了。",
+                "Anthropic 流式正文错误");
+        const auto anthPayload = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
+        require(anthPayload["model"] == "GLM-5.2" && anthPayload["max_tokens"].toInt() > 0 &&
+                    anthPayload["system"].toString().contains("少用副词") &&
+                    anthPayload["messages"].toArray().size() == 1 &&
+                    anthPayload["messages"].toArray().first().toObject()["role"] == "user",
+                "Anthropic 写作请求格式错误");
         service->setCurrentIndex(service->findData("glm"));
         models->setCurrentText("glm-5.3");
         click(window, "测试连接");

@@ -7,6 +7,7 @@ struct ChatResponse
     QByteArray buffer, event;
     QString text, error;
     bool thinking = false, finished = false;
+    bool messagesApi = false;
 
     QString read(const QByteArray &bytes, bool end = false)
     {
@@ -54,7 +55,7 @@ struct ChatResponse
         auto data = std::exchange(event, {});
         if (data.isEmpty())
             return {};
-        if (data.trimmed() == "[DONE]")
+        if (!messagesApi && data.trimmed() == "[DONE]")
         {
             finished = true;
             return {};
@@ -71,6 +72,29 @@ struct ChatResponse
             error = errorMessage(obj);
             if (error.isEmpty())
                 error = "服务报告输出失败。";
+            return {};
+        }
+        if (messagesApi)
+        {
+            auto type = obj["type"].toString();
+            if (type == "message_stop")
+                finished = true;
+            else if (type == "content_block_start")
+            {
+                auto block = obj["content_block"].toObject();
+                if (block["type"] == "text")
+                    return block["text"].toString();
+                if (block["type"] == "thinking")
+                    thinking = true;
+            }
+            else if (type == "content_block_delta")
+            {
+                auto delta = obj["delta"].toObject();
+                if (delta["type"] == "text_delta")
+                    return delta["text"].toString();
+                if (delta["type"] == "thinking_delta")
+                    thinking = true;
+            }
             return {};
         }
         auto choices = obj["choices"].toArray();

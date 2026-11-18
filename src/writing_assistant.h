@@ -178,24 +178,26 @@ class WritingAssistant : public QWidget
         settings.setValue("writing/provider", site().id);
         settings.setValue("writing/model/" + site().id, model->currentText());
         QJsonArray turns;
+        QJsonObject payload{{"model", model->currentText()}, {"stream", !probe}};
         if (probe)
             turns.append(QJsonObject{{"role", "user"}, {"content", "请只回复 OK。"}});
         else
         {
             auto [rules, input] = messages();
-            turns = {QJsonObject{{"role", "system"}, {"content", rules}},
-                     QJsonObject{{"role", "user"}, {"content", input}}};
+            if (site().messagesApi())
+                payload["system"] = rules;
+            else
+                turns.append(QJsonObject{{"role", "system"}, {"content", rules}});
+            turns.append(QJsonObject{{"role", "user"}, {"content", input}});
         }
-        QJsonObject payload{{"model", model->currentText()}, {"messages", turns}, {"stream", !probe}};
-        if (probe)
-            payload["max_tokens"] = 64;
+        payload["messages"] = turns;
+        if (probe || site().messagesApi())
+            payload["max_tokens"] = probe ? 64 : 4096;
         QNetworkRequest request(endpoint());
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(60000);
         const auto token = key->text().trimmed();
-        if (!token.isEmpty())
-            request.setRawHeader("Authorization", "Bearer " + token.toUtf8());
+        site().setHeaders(request, token);
         sessionKeys[site().credentialId()] = token;
         bool canApply = probe && apply->isEnabled();
         if (!probe)
@@ -206,6 +208,7 @@ class WritingAssistant : public QWidget
         }
         apply->setEnabled(false);
         response = {};
+        response.messagesApi = site().messagesApi();
         timedOut = false;
         auto *reply = network.post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
         pending = reply;
@@ -269,7 +272,22 @@ class WritingAssistant : public QWidget
                     status->setText(failure(reply, code, ChatResponse::errorMessage(obj)));
                     return;
                 }
-                if (!choices.isEmpty())
+                if (site().messagesApi() && obj["type"] == "message")
+                {
+                    bool thought = false;
+                    for (auto part : obj["content"].toArray())
+                    {
+                        auto block = part.toObject();
+                        if (block["type"] == "text")
+                            text += block["text"].toString();
+                        else if (block["type"] == "thinking" || block["type"] == "redacted_thinking")
+                            thought = true;
+                    }
+                    const auto finish = obj["stop_reason"].toString();
+                    reasoningOnly = probe && text.trimmed().isEmpty() && thought &&
+                                    (finish == "max_tokens" || finish == "end_turn");
+                }
+                else if (!site().messagesApi() && !choices.isEmpty())
                 {
                     const auto choice = choices.first().toObject();
                     const auto message = choice["message"].toObject();

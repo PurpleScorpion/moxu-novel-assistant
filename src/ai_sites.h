@@ -13,16 +13,38 @@ struct AiSite
 {
     QString id, name, address;
     QStringList models;
+    QString protocol = "chat";
+    bool messagesApi() const
+    {
+        return protocol == "messages" || protocol == "messages-bearer";
+    }
     QUrl endpoint() const
     {
         QUrl url(address.trimmed(), QUrl::StrictMode);
         auto path = url.path();
         while (path.endsWith('/'))
             path.chop(1);
-        if (!path.endsWith("/chat/completions"))
+        if (messagesApi())
+        {
+            if (!path.endsWith("/v1/messages"))
+                path += path.endsWith("/v1") ? "/messages" : "/v1/messages";
+        }
+        else if (!path.endsWith("/chat/completions"))
             path += "/chat/completions";
         url.setPath(path);
         return url;
+    }
+    void setHeaders(QNetworkRequest &request, const QString &key) const
+    {
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        if (messagesApi())
+            request.setRawHeader("anthropic-version", "2023-06-01");
+        if (key.isEmpty())
+            return;
+        if (protocol == "messages")
+            request.setRawHeader("x-api-key", key.toUtf8());
+        else
+            request.setRawHeader("Authorization", "Bearer " + key.toUtf8());
     }
     bool loopback() const
     {
@@ -50,6 +72,11 @@ inline QList<AiSite> aiSites()
         {"deepseek", "DeepSeek", "https://api.deepseek.com", {"deepseek-flash", "deepseek-v4-pro"}},
         {"glm", "智谱 GLM（国内）", "https://open.bigmodel.cn/api/paas/v4", {"glm-5.3", "glm-5.2", "glm-5-turbo"}},
         {"zai", "Z.AI GLM（国际）", "https://api.z.ai/api/paas/v4", {"glm-5.2", "glm-5-turbo", "glm-5.3"}},
+        {"zai-messages",
+         "Z.AI（ZCode 接口）",
+         "https://api.z.ai/api/anthropic",
+         {"GLM-5.2", "GLM-5-Turbo"},
+         "messages-bearer"},
         {"local",
          "本机兼容服务",
          QString("http://127.0.0.1:%1/v1").arg(prefs.value("writing/port", 8080).toInt()),
@@ -65,6 +92,7 @@ inline QList<AiSite> aiSites()
     {
         auto obj = QJsonDocument::fromJson(prefs.value(id).toByteArray()).object();
         AiSite site{id, obj["name"].toString(), obj["address"].toString(), obj["models"].toVariant().toStringList()};
+        site.protocol = obj["protocol"].toString("chat");
         auto it = std::find_if(sites.begin(), sites.end(), [&](const AiSite &s) { return s.id == id; });
         if (it == sites.end())
             sites.append(site);
@@ -115,6 +143,7 @@ class AiConfig : public QWidget
     QListWidget *list = new QListWidget;
     QLineEdit *name = new QLineEdit, *address = new QLineEdit, *key = new QLineEdit;
     QPlainTextEdit *models = new QPlainTextEdit;
+    QComboBox *protocol = new QComboBox;
     QCheckBox *remember = new QCheckBox("在此电脑记住密钥（Windows 凭据管理器）");
     QLabel *notice = new QLabel;
     QHash<QString, QString> &keys;
@@ -134,18 +163,15 @@ class AiConfig : public QWidget
     }
     void fetchModels()
     {
-        AiSite site{id, name->text(), address->text(), {}};
+        AiSite site{id, name->text(), address->text(), {}, protocol->currentData().toString()};
         if (!site.validAddress())
         {
             notice->setText("请先填写有效的站点地址。");
             return;
         }
-        auto url = site.endpoint().resolved(QUrl("../models"));
+        auto url = site.endpoint().resolved(QUrl(site.messagesApi() ? "models" : "../models"));
         QNetworkRequest request(url);
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-        const auto token = key->text().trimmed();
-        if (!token.isEmpty())
-            request.setRawHeader("Authorization", "Bearer " + token.toUtf8());
+        site.setHeaders(request, key->text().trimmed());
         auto *reply = network.get(request);
         catalog = reply;
         fetch->setEnabled(false);
@@ -192,9 +218,10 @@ class AiConfig : public QWidget
     {
         cancelCatalog();
         AiSite site = sites.value(row);
-        QSignalBlocker block(address);
+        QSignalBlocker block(address), blockProtocol(protocol);
         id = site.id;
         name->setText(site.name);
+        protocol->setCurrentIndex(qMax(0, protocol->findData(site.protocol)));
         address->setText(site.address);
         models->setPlainText(site.models.join('\n'));
         const auto boundCredential = site.id.isEmpty() ? QString() : site.credentialId();
@@ -205,7 +232,7 @@ class AiConfig : public QWidget
     }
     void save()
     {
-        AiSite site{id, name->text().trimmed(), address->text().trimmed(), {}};
+        AiSite site{id, name->text().trimmed(), address->text().trimmed(), {}, protocol->currentData().toString()};
         for (auto line : models->toPlainText().split('\n'))
         {
             line = line.trimmed();
@@ -224,6 +251,7 @@ class AiConfig : public QWidget
         QSettings settings;
         settings.setValue("aiSites/" + site.id,
                           QJsonDocument(QJsonObject{{"name", site.name},
+                                                    {"protocol", site.protocol},
                                                     {"address", site.address},
                                                     {"models", QJsonArray::fromStringList(site.models)}})
                               .toJson(QJsonDocument::Compact));
@@ -282,7 +310,13 @@ class AiConfig : public QWidget
         columns->addLayout(form, 3);
         form->addWidget(new QLabel("站点名称"));
         form->addWidget(name);
-        form->addWidget(new QLabel("接口基础地址（兼容 Chat Completions）"));
+        form->addWidget(new QLabel("接口协议"));
+        protocol->setObjectName("siteProtocol");
+        protocol->addItem("OpenAI 兼容（Chat Completions）", "chat");
+        protocol->addItem("Anthropic Messages（API Key）", "messages");
+        protocol->addItem("Anthropic Messages（Bearer，ZCode 接口）", "messages-bearer");
+        form->addWidget(protocol);
+        form->addWidget(new QLabel("接口基础地址"));
         form->addWidget(address);
         auto *modelHeader = new QHBoxLayout;
         form->addLayout(modelHeader);
@@ -304,6 +338,12 @@ class AiConfig : public QWidget
         for (const auto &site : sites)
             list->addItem(site.name);
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) { load(row); });
+        connect(protocol, &QComboBox::currentIndexChanged, this, [this] {
+            cancelCatalog();
+            key->clear();
+            remember->setChecked(false);
+            notice->setText("协议已更改，请核对基础地址并填写对应的密钥。");
+        });
         connect(address, &QLineEdit::textChanged, this, [this] {
             cancelCatalog();
             key->clear();
