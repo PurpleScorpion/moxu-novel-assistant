@@ -188,11 +188,7 @@ class WritingAssistant : public QWidget
         }
         QJsonObject payload{{"model", model->currentText()}, {"messages", turns}, {"stream", !probe}};
         if (probe)
-        {
             payload["max_tokens"] = 64;
-            if (site().id == "glm" || site().id == "zai")
-                payload["thinking"] = QJsonObject{{"type", "disabled"}};
-        }
         QNetworkRequest request(endpoint());
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
@@ -252,6 +248,7 @@ class WritingAssistant : public QWidget
                 return;
             }
             QString text;
+            bool reasoningOnly = false;
             if (!probe && isStream(reply))
             {
                 readStream(reply, true);
@@ -267,15 +264,22 @@ class WritingAssistant : public QWidget
             {
                 auto obj = QJsonDocument::fromJson(reply->readAll()).object();
                 auto choices = obj.value("choices").toArray();
-                if (!choices.isEmpty())
-                    text = choices.first().toObject()["message"].toObject()["content"].toString();
                 if (obj.contains("error"))
                 {
                     status->setText(failure(reply, code, ChatResponse::errorMessage(obj)));
                     return;
                 }
+                if (!choices.isEmpty())
+                {
+                    const auto choice = choices.first().toObject();
+                    const auto message = choice["message"].toObject();
+                    const auto finish = choice["finish_reason"].toString();
+                    text = message["content"].toString();
+                    reasoningOnly = probe && text.trimmed().isEmpty() && (finish == "length" || finish == "stop") &&
+                                    !message["reasoning_content"].toString().trimmed().isEmpty();
+                }
             }
-            if (text.trimmed().isEmpty())
+            if (text.trimmed().isEmpty() && !reasoningOnly)
             {
                 status->setText("服务未返回正文，请核对模型名称及接口类型。");
                 return;
@@ -284,7 +288,8 @@ class WritingAssistant : public QWidget
             {
                 status->setText(QString("连接成功 · %1 / %2 · %3 毫秒")
                                     .arg(site().name, model->currentText())
-                                    .arg(elapsed.elapsed()));
+                                    .arg(elapsed.elapsed()) +
+                                (reasoningOnly ? "（本次短测试仅返回思考内容）" : ""));
                 return;
             }
             if (!isStream(reply))

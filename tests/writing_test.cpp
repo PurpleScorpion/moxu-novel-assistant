@@ -95,6 +95,9 @@ int main(int argc, char **argv)
         require(siteList->currentItem()->text() == "测试站点" &&
                     aiSites().last().models == QStringList{"model-a", "model-b"},
                 "新增站点或模型未保存");
+        siteList->setCurrentItem(siteList->findItems("智谱 GLM（国内）", Qt::MatchExactly).first());
+        address->setText(QString("http://127.0.0.1:%1/v1").arg(port));
+        click(window, "保存配置");
         siteList->setCurrentItem(siteList->findItems("本机兼容服务", Qt::MatchExactly).first());
         click(window, "返回");
         auto *recent = visible<QListWidget>(window);
@@ -158,9 +161,21 @@ int main(int argc, char **argv)
                                   .toInt();
                 if (wire.size() - split - 4 < length)
                     return;
-                if (!QJsonDocument::fromJson(wire.mid(split + 4)).object()["stream"].toBool())
+                const auto request = QJsonDocument::fromJson(wire.mid(split + 4)).object();
+                if (!request["stream"].toBool())
                 {
                     QByteArray response = R"({"choices":[{"message":{"content":"OK"}}]})";
+                    if (request["model"].toString() == "glm-5.3")
+                    {
+                        if (request["thinking"].toObject()["type"].toString() == "disabled")
+                        {
+                            socket->write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+                            socket->disconnectFromHost();
+                            return;
+                        }
+                        response =
+                            R"({"choices":[{"finish_reason":"length","message":{"reasoning_content":"思考","content":null}}]})";
+                    }
                     socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
                                   QByteArray::number(response.size()) + "\r\nConnection: close\r\n\r\n" + response);
                     socket->disconnectFromHost();
@@ -200,6 +215,10 @@ int main(int argc, char **argv)
         service->hidePopup();
         service->setCurrentIndex(service->findData("zai"));
         require(models->findText("glm-5.2") >= 0, "切换站点后模型未更新");
+        service->setCurrentIndex(service->findData("glm"));
+        models->setCurrentText("glm-5.3");
+        click(window, "测试连接");
+        require(waitStatus("连接成功") && waitStatus("仅返回思考内容"), "GLM-5.3 始终思考模式测试失败");
         service->setCurrentIndex(service->findData("local"));
         models->setCurrentIndex(1);
         click(window, "测试连接");
