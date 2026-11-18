@@ -27,8 +27,10 @@ class InlineActions : public QStackedWidget
     QVBoxLayout *begin(const QString &title)
     {
         finish();
-        auto *page = new QWidget;
+        auto *page = new QFrame;
+        page->setObjectName("actionPage");
         layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 16, 18, 16);
         layout->setSpacing(10);
         auto *heading = new QLabel(title);
         heading->setTextFormat(Qt::PlainText);

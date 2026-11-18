@@ -166,7 +166,7 @@ int main(int argc, char **argv)
             currentLimits |= label->text().contains("每章最多 2 份，全书共用 7 份");
         check(currentLimits, "历史侧栏未显示本书设置");
         action("时间轴");
-        check(preview()->toPlainText().contains("240"), "时间轴错误");
+        check(visible<QTextEdit>(sheet()).first()->toPlainText().contains("240"), "时间轴错误");
         action("关系图");
         check(!visible<QGraphicsView>(sheet()).isEmpty(), "关系图未嵌入");
         action("资料与导出");
@@ -175,9 +175,8 @@ int main(int argc, char **argv)
         click(sheet(), "保存模板");
         check(verify.value("SELECT count(*) FROM templates WHERE title='门派面板'").toInt() == 1, "模板未保存");
         action("资料与导出");
-        click(sheet(), "整书基础校对");
-        check(preview()->isReadOnly(), "校对结果缺失");
-        action("资料与导出");
+        for (auto *button : visible<QPushButton>(sheet()))
+            check(button->text() != "整书基础校对", "资料与导出中仍有已移除的校对入口");
         click(sheet(), "导出全书 TXT");
         auto out = dir.filePath("导出.txt");
         {

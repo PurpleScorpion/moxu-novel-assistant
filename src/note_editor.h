@@ -1,5 +1,6 @@
 #pragma once
 #include "inline_files.h"
+#include "interface.h"
 #include "save_status.h"
 #include "skill_file.h"
 #include <QtWidgets>
@@ -103,11 +104,12 @@ class NoteEditor : public QWidget
                                     ? "保存在本机，所有书籍都可选用。适合叙事视角、行文节奏等常用写作要求。"
                                     : "随这本书保存。适合人物口吻、世界观约束等专属写作要求。");
         hint->setWordWrap(true);
+        hint->setObjectName("hint");
         layout->addWidget(hint);
         auto *columns = new QHBoxLayout;
         layout->addLayout(columns, 1);
-        auto *list = new QVBoxLayout;
-        columns->addLayout(list, 1);
+        columns->setSpacing(12);
+        auto *list = panelColumn(columns, 1, true);
         list->addWidget(entries);
         auto *add = new QPushButton(outline ? "新增大纲条目" : "新增 Skill");
         list->addWidget(add);
@@ -166,8 +168,7 @@ class NoteEditor : public QWidget
                 });
             });
         }
-        auto *form = new QVBoxLayout;
-        columns->addLayout(form, 2);
+        auto *form = panelColumn(columns, 3);
         form->addWidget(new QLabel("标题"));
         form->addWidget(title);
         if (outline)
@@ -187,6 +188,7 @@ class NoteEditor : public QWidget
         auto *buttons = new QHBoxLayout;
         form->addLayout(buttons);
         buttons->addWidget(removeButton);
+        buttons->addStretch();
         auto *reset = new QPushButton("还原");
         buttons->addWidget(reset);
         auto *commit = new QPushButton("保存");

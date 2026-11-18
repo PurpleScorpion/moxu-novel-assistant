@@ -1,4 +1,5 @@
 #pragma once
+#include "interface.h"
 #include <QtNetwork>
 #include <QtWidgets>
 #include <functional>
@@ -320,25 +321,41 @@ class AiConfig : public QWidget
         root->setContentsMargins(24, 16, 24, 16);
         auto *heading = new QLabel("AI 配置");
         heading->setObjectName("title");
-        root->addWidget(heading);
+        auto *header = new QHBoxLayout;
+        root->addLayout(header);
+        header->addWidget(heading, 1);
+        auto *done = new QPushButton("返回");
+        header->addWidget(done);
         auto *columns = new QHBoxLayout;
         root->addLayout(columns, 1);
-        auto *left = new QVBoxLayout;
-        columns->addLayout(left, 1);
-        left->addWidget(new QLabel("服务站点"));
+        columns->setSpacing(14);
+        auto *left = panelColumn(columns, 1, true);
+        left->addWidget(sectionLabel("服务站点"));
         left->addWidget(list);
         auto *add = new QPushButton("新增站点");
         left->addWidget(add);
-        auto *form = new QVBoxLayout;
-        columns->addLayout(form, 3);
-        form->addWidget(new QLabel("站点名称"));
-        form->addWidget(name);
-        form->addWidget(new QLabel("接口协议"));
+        auto *scroll = new QScrollArea;
+        scroll->setObjectName("formScroll");
+        scroll->setWidgetResizable(true);
+        columns->addWidget(scroll, 3);
+        auto *content = new QFrame;
+        content->setObjectName("contentPanel");
+        scroll->setWidget(content);
+        auto *form = new QVBoxLayout(content);
+        form->setContentsMargins(16, 16, 16, 16);
+        form->setSpacing(10);
+        auto *identity = new QGridLayout;
+        form->addLayout(identity);
+        identity->addWidget(new QLabel("站点名称"), 0, 0);
+        identity->addWidget(name, 1, 0);
+        identity->addWidget(new QLabel("接口协议"), 0, 1);
         protocol->setObjectName("siteProtocol");
         protocol->addItem("OpenAI 兼容（Chat Completions）", "chat");
         protocol->addItem("Anthropic Messages（API Key）", "messages");
         protocol->addItem("Anthropic Messages（Bearer，ZCode 兼容）", "messages-bearer");
-        form->addWidget(protocol);
+        identity->addWidget(protocol, 1, 1);
+        identity->setColumnStretch(0, 1);
+        identity->setColumnStretch(1, 1);
         form->addWidget(new QLabel("接口基础地址"));
         form->addWidget(address);
         auto *modelHeader = new QHBoxLayout;
@@ -354,11 +371,11 @@ class AiConfig : public QWidget
         form->addWidget(notice);
         auto *buttons = new QHBoxLayout;
         form->addLayout(buttons);
-        auto *done = new QPushButton("返回");
         auto *commit = new QPushButton("保存配置");
-        buttons->addWidget(done);
-        buttons->addWidget(commit);
+        commit->setObjectName("primary");
+        buttons->addStretch();
         buttons->addWidget(useGlm);
+        buttons->addWidget(commit);
         for (const auto &site : sites)
             list->addItem(site.name);
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) { load(row); });

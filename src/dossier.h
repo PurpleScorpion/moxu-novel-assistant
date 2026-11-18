@@ -34,17 +34,17 @@ class Dossier : public QWidget
         layout->addWidget(b);
         return b;
     }
-    QVBoxLayout *section(QString text)
+    QVBoxLayout *section(QString text, bool framed = true)
     {
         auto *page = new QWidget;
         details->addWidget(page);
         auto *layout = new QVBoxLayout(page);
-        layout->setContentsMargins(20, 12, 20, 12);
+        layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(12);
         auto *header = new QLabel(text);
         header->setObjectName("title");
         layout->addWidget(header);
-        return layout;
+        return framed ? panelColumn(layout, 1) : layout;
     }
     void safe(std::function<void()> action)
     {
@@ -183,15 +183,11 @@ class Dossier : public QWidget
         : renameBook(std::move(rename))
     {
         auto *root = new QHBoxLayout(this);
-        root->setContentsMargins(0, 0, 0, 0);
-        root->setSpacing(0);
-        auto *rail = new QFrame;
-        rail->setObjectName("rail");
-        rail->setFixedWidth(192);
-        auto *side = new QVBoxLayout(rail);
-        side->setContentsMargins(14, 20, 14, 18);
-        side->setSpacing(18);
-        side->addWidget(new MatrixBanner("墨序"));
+        root->setContentsMargins(22, 16, 22, 16);
+        root->setSpacing(14);
+        auto *side = panelColumn(root, 0, true);
+        side->parentWidget()->setFixedWidth(184);
+        side->addWidget(new MatrixBanner("基础资料"));
         navigation->setObjectName("navigation");
         navigation->addItems({"书籍概览", "人物档案", "人物关系", "事件账本"});
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
@@ -211,36 +207,43 @@ class Dossier : public QWidget
                 shelf();
             });
         });
-        root->addWidget(rail);
         auto *right = new QVBoxLayout;
         root->addLayout(right, 1);
         right->addWidget(details, 1);
         right->addWidget(notice);
         auto *overview = section("书籍概览");
-        overview->addWidget(new MatrixBanner("基础资料"));
+        counts->setObjectName("sectionTitle");
         overview->addWidget(counts);
-        overview->addWidget(historySettings);
-        overview->addWidget(new QLabel("书名"));
-        overview->addWidget(title);
-        overview->addWidget(new QLabel("题材"));
-        overview->addWidget(genre);
+        auto *metadata = new QGridLayout;
+        overview->addLayout(metadata);
+        metadata->addWidget(new QLabel("书名"), 0, 0);
+        metadata->addWidget(title, 1, 0);
+        metadata->addWidget(new QLabel("题材"), 0, 1);
+        metadata->addWidget(genre, 1, 1);
+        metadata->setColumnStretch(0, 2);
+        metadata->setColumnStretch(1, 1);
         overview->addWidget(new QLabel("作品简介"));
         overview->addWidget(synopsis, 1);
-        connect(btn("保存书籍资料", overview), &QPushButton::clicked, this, &Dossier::saveNow);
-        auto *personPage = section("人物档案");
+        auto *saveProfile = new QPushButton("保存书籍资料");
+        saveProfile->setObjectName("primary");
+        overview->addWidget(saveProfile, 0, Qt::AlignRight);
+        connect(saveProfile, &QPushButton::clicked, this, &Dossier::saveNow);
+        overview->addSpacing(4);
+        overview->addWidget(historySettings);
+        auto *personPage = section("人物档案", false);
         auto *columns = new QHBoxLayout;
-        personPage->addLayout(columns);
-        auto *list = new QVBoxLayout;
-        columns->addLayout(list, 1);
+        personPage->addLayout(columns, 1);
+        columns->setSpacing(12);
+        auto *list = panelColumn(columns, 1, true);
+        list->addWidget(sectionLabel("人物列表"));
         list->addWidget(people);
         people->setObjectName("personList");
-        auto *form = new QVBoxLayout;
-        columns->addLayout(form, 2);
+        auto *form = panelColumn(columns, 3);
         form->addWidget(new QLabel("姓名"));
         form->addWidget(name);
         name->setObjectName("personName");
         form->addWidget(new QLabel("自定义属性"));
-        form->addWidget(attrs);
+        form->addWidget(attrs, 1);
         attrs->setPlaceholderText("境界：筑基\n所属势力：青云宗");
         attrs->setObjectName("personAttrs");
         connect(btn("新建人物", list), &QPushButton::clicked, this, [this] {
@@ -253,7 +256,10 @@ class Dossier : public QWidget
                 notice->setText("填写姓名后，人物资料会自动保存");
             });
         });
-        connect(btn("保存人物", form), &QPushButton::clicked, this, &Dossier::saveNow);
+        auto *savePerson = new QPushButton("保存人物");
+        savePerson->setObjectName("primary");
+        form->addWidget(savePerson, 0, Qt::AlignRight);
+        connect(savePerson, &QPushButton::clicked, this, &Dossier::saveNow);
         auto edited = [this] {
             if (!loading)
                 notice->edited();
@@ -289,6 +295,10 @@ class Dossier : public QWidget
             });
         });
         auto *links = section("人物关系");
+        auto *relationHeader = new QHBoxLayout;
+        links->addLayout(relationHeader);
+        relationHeader->addWidget(sectionLabel("关系列表"), 1);
+        connect(btn("查看关系图", relationHeader), &QPushButton::clicked, this, [=, this] { safe(graph); });
         links->addWidget(edges, 1);
         auto *line = new QHBoxLayout;
         links->addLayout(line);
@@ -311,10 +321,13 @@ class Dossier : public QWidget
                 notice->confirm("人物关系");
             });
         });
-        connect(btn("查看关系图", links), &QPushButton::clicked, this, [=, this] { safe(graph); });
         auto *log = section("事件账本");
         log->addWidget(ledger);
         ledger->setColumnCount(6);
+        ledger->verticalHeader()->hide();
+        ledger->setAlternatingRowColors(true);
+        ledger->setShowGrid(false);
+        ledger->setSelectionBehavior(QAbstractItemView::SelectRows);
         ledger->setHorizontalHeaderLabels({"章节", "人物", "事件", "资源", "变动", "结余"});
         ledger->setEditTriggers(QAbstractItemView::NoEditTriggers);
         ledger->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
@@ -327,7 +340,7 @@ class Dossier : public QWidget
                 notePages.at(index)->showImported(id);
             });
             notePages.append(editor);
-            section(scopeName(scope))->addWidget(editor);
+            section(scopeName(scope), false)->addWidget(editor, 1);
         }
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)

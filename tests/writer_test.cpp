@@ -186,6 +186,10 @@ int main(int argc, char **argv)
         return 40;
     if (!click("保存人物") || !personStatus->text().startsWith("✓ 人物资料已保存"))
         return 11;
+    window.activateWindow();
+    attrs->setFocus();
+    if (!QTest::qWaitFor([&] { return window.isActiveWindow() && attrs->hasFocus(); }, 3000))
+        return 42;
     attrs->appendPlainText("剑修");
     QTest::keyClick(attrs, Qt::Key_S, Qt::ControlModifier);
     if (!personStatus->text().startsWith("✓ 人物资料已保存") ||

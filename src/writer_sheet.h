@@ -13,8 +13,10 @@ class WriterSheet : public QScrollArea
         setWidgetResizable(true);
         setMinimumWidth(290);
         auto *content = new QWidget;
+        content->setObjectName("sheetContent");
         setWidget(content);
         form = new QVBoxLayout(content);
+        form->setContentsMargins(15, 14, 15, 16);
         form->setSpacing(10);
         form->setAlignment(Qt::AlignTop);
         auto *row = new QHBoxLayout;

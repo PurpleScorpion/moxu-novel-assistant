@@ -59,7 +59,7 @@ inline void applyTheme(QApplication &app)
 {
     app.setStyle(new MoxuStyle);
     QPalette palette;
-    palette.setColor(QPalette::Window, QColor("#09120f"));
+    palette.setColor(QPalette::Window, QColor("#0b1511"));
     palette.setColor(QPalette::WindowText, QColor("#d9eae0"));
     palette.setColor(QPalette::Text, QColor("#d9eae0"));
     palette.setColor(QPalette::PlaceholderText, QColor("#9baea1"));
@@ -76,17 +76,26 @@ inline void applyTheme(QApplication &app)
     QLabel#title {font-size:26px;font-weight:700;color:#dbf9df;}
     QLabel#sectionTitle {font-size:17px;font-weight:600;color:#abefbc;}
     QLabel#hint {color:#a0bcac;}
-    QFrame#rail {background:#0d1914;border-right:1px solid #294536;}
+    QFrame#rail {background:#102019;border:1px solid #2b4737;border-radius:8px;}
+    QFrame#contentPanel,QWidget#actionPage,QWidget#sheetContent {background:#12231b;border:1px solid #324b3c;border-radius:8px;}
+    QListWidget#chapterList,QListWidget#siteList {background:#102019;border:none;padding:0;}
+    QLabel#actionError,QLabel#sheetMessage {color:#efce9e;}
+    QPlainTextEdit#manuscript {background:#0c1913;border:1px solid #34513e;border-radius:6px;}
+    QPushButton#saveChapter {background:#a3eeb1;color:#102417;font-weight:600;}
     QPushButton,QToolButton {background:#162a21;border:1px solid #365443;border-radius:4px;padding:7px 12px;color:#dfefe4;}
     QPushButton:hover,QToolButton:hover {background:#234634;border-color:#68bd83;}
     QPushButton#primary {background:#a3eeb1;color:#102417;border-color:#a3eeb1;font-weight:600;}
     QPushButton:disabled,QPushButton#primary:disabled {background:#122019;color:#778d7e;border-color:#2a3d31;}
-    QListWidget,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QTableWidget {background:#101f19;border:1px solid #345140;border-radius:4px;padding:6px;}
+    QListWidget,QPlainTextEdit,QTextEdit,QLineEdit,QComboBox,QSpinBox,QTableWidget {background:#101f19;border:1px solid #345140;border-radius:4px;padding:6px;}
     QListWidget::item {background:transparent;border:1px solid transparent;margin:0;padding:7px;}
     QListWidget::item:selected {background:#254834;color:#bcffca;}
     QListWidget#navigation {border:none;background:transparent;padding:0;}
-    QToolBar {spacing:3px;background:#0e1c15;padding:5px;border-bottom:1px solid #294536;}
-    QToolBar QToolButton {border:none;}
+    QToolBar {spacing:3px;background:#102019;padding:7px 12px;border-bottom:1px solid #294536;}
+    QToolBar QToolButton {border:none;padding:6px 9px;background:transparent;}
+    QToolBar QToolButton:hover {background:#234634;}
+    QToolBar::separator {width:1px;background:#345140;margin:4px 5px;}
+    QScrollArea#writerSheet,QScrollArea#formScroll {border:none;background:transparent;}
+    QPlainTextEdit:focus,QLineEdit:focus {border-color:#80be92;}
     QMenu {padding:4px;background:#112019;border:1px solid #48634f;}
     QMenu::item {padding:7px 18px;} QMenu::item:selected {background:#284f36;}
     QHeaderView::section {background:#193324;color:#c7e9ce;padding:8px;border:none;}
@@ -100,6 +109,24 @@ inline void applyTheme(QApplication &app)
     )");
 }
 
+inline QVBoxLayout *panelColumn(QBoxLayout *parent, int stretch, bool rail = false)
+{
+    auto *panel = new QFrame;
+    panel->setObjectName(rail ? "rail" : "contentPanel");
+    auto *column = new QVBoxLayout(panel);
+    column->setContentsMargins(16, 16, 16, 16);
+    column->setSpacing(10);
+    parent->addWidget(panel, stretch);
+    return column;
+}
+
+inline QLabel *sectionLabel(const QString &text)
+{
+    auto *label = new QLabel(text);
+    label->setObjectName("sectionTitle");
+    return label;
+}
+
 class MatrixBanner : public QWidget
 {
     QString title;
@@ -107,12 +134,12 @@ class MatrixBanner : public QWidget
   public:
     explicit MatrixBanner(QString text) : title(std::move(text))
     {
-        setMinimumHeight(96);
+        setFixedHeight(62);
     }
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        p.fillRect(rect(), QColor("#10251a"));
+        p.fillRect(rect(), QColor("#102019"));
         p.setFont(QFont("Microsoft YaHei UI", 10));
         const QString glyphs = "墨序书卷山河风月星辰春秋诗文云海";
         const int step = p.fontMetrics().height() + 2;
@@ -127,8 +154,8 @@ class MatrixBanner : public QWidget
             }
         p.fillRect(0, 0, 3, height(), QColor("#9aefaa"));
         p.setPen(QColor("#baf6c5"));
-        p.setFont(QFont("Microsoft YaHei UI", 23, QFont::Bold));
-        QRect textRect = rect().adjusted(24, 5, -20, -5);
+        p.setFont(QFont("Microsoft YaHei UI", 18, QFont::Bold));
+        QRect textRect = rect().adjusted(14, 4, -8, -4);
         p.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
                    p.fontMetrics().elidedText(title, Qt::ElideRight, textRect.width()));
     }

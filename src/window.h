@@ -20,6 +20,7 @@ class Window : public QMainWindow
     QLabel *location = new QLabel, *directoryMessage = new QLabel;
     QListWidget *recent = new QListWidget;
     QLabel *shelfHeading = new QLabel;
+    QLabel *emptyShelf = new QLabel("点击左侧「新建书籍」开始写作，或打开已有的 .moxu 书籍。");
     QListWidget *chapters = new QListWidget;
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
@@ -107,11 +108,12 @@ class Window : public QMainWindow
             return false;
         }
     }
-    void button(QBoxLayout *layout, const QString &title, Action action)
+    QPushButton *button(QBoxLayout *layout, const QString &title, Action action)
     {
         auto *btn = new QPushButton(title);
         layout->addWidget(btn);
         connect(btn, &QPushButton::clicked, this, [this, action] { guard(action); });
+        return btn;
     }
     void tool(const QString &title, Action action)
     {
@@ -133,7 +135,7 @@ class Window : public QMainWindow
                 return;
             insertion.insertText(book->value("SELECT name FROM people WHERE id=?", {people->currentData()}).toString());
             closeSheet();
-        });
+        })->setObjectName("primary");
     }
     void save(Book::SaveMode mode = Book::SaveMode::Automatic)
     {
@@ -389,8 +391,9 @@ class Window : public QMainWindow
             menu->addAction("更换封面", this, [this, path] { guard([&] { changeCover(path); }); });
             menu->addAction("删除书籍", this, [this, path, title] { deleteFromShelf(path, title); });
         }
-        shelfHeading->setText(recent->count() ? QString("我的书籍 · %1 本").arg(recent->count())
-                                              : "书架暂无书籍，可以新建或打开一本书。");
+        shelfHeading->setText(QString("我的书籍 · %1 本").arg(recent->count()));
+        recent->setVisible(recent->count() > 0);
+        emptyShelf->setVisible(recent->count() == 0);
     }
     void openBook(QString path, const QString &title = {})
     {
@@ -554,7 +557,7 @@ class Window : public QMainWindow
                 book->event(chapter, id, unit, delta->value(), desc);
             status->setText(insert->isChecked() ? "事件和正文已保存" : "事件已保存");
             closeSheet();
-        });
+        })->setObjectName("primary");
     }
     static QString eventText(const QString &description, const QString &unit, int delta, qint64 before)
     {
@@ -609,26 +612,37 @@ class Window : public QMainWindow
                 throw std::runtime_error("请先选择人物和模板，并填写插入内容。");
             insertion.insertText(preview->toPlainText());
             closeSheet();
-        });
-    }
-    void showText(const QString &title, const QString &text)
-    {
-        beginSheet(title);
-        auto *view = new QPlainTextEdit(text);
-        view->setReadOnly(true);
-        sheet->form->addWidget(view, 1);
+        })->setObjectName("primary");
     }
     void timeline()
     {
-        auto q = book->run("SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
-                           "person,resource ORDER BY chapter,e.id) FROM events e JOIN chapters c ON c.id=e.chapter "
-                           "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
-        QStringList rows;
+        auto q =
+            book->run("SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
+                      "person,resource ORDER BY chapter,e.id),c.id FROM events e JOIN chapters c ON c.id=e.chapter "
+                      "JOIN people p ON p.id=e.person ORDER BY chapter,e.id");
+        beginSheet("时间轴与收支明细");
+        auto *view = new QTextEdit;
+        view->setReadOnly(true);
+        view->document()->setDocumentMargin(14);
+        sheet->form->addWidget(view, 1);
+        QString html;
+        QVariant lastChapter;
         while (q.next())
-            rows << QString("%1  ·  %2\n%3   %4 %5，结余 %6\n")
-                        .arg(q.value(0).toString(), q.value(1).toString(), q.value(2).toString(), q.value(3).toString(),
-                             q.value(4).toString(), q.value(5).toString());
-        showText("时间轴与收支明细", rows.isEmpty() ? "尚未记录事件" : rows.join("\n"));
+        {
+            if (lastChapter != q.value(6))
+            {
+                lastChapter = q.value(6);
+                html += QString("<h3 style='color:#a3eeb1'>%1</h3>").arg(q.value(0).toString().toHtmlEscaped());
+            }
+            auto amount = q.value(4).toString();
+            if (q.value(4).toLongLong() > 0)
+                amount.prepend('+');
+            html += QString("<p><b>%1</b>　%2<br><span style='color:#afcbbb'>%3 %4　·　结余 %5</span></p>")
+                        .arg(q.value(1).toString().toHtmlEscaped(),
+                             q.value(2).toString().toHtmlEscaped().replace('\n', "<br>"),
+                             q.value(3).toString().toHtmlEscaped(), amount, q.value(5).toString());
+        }
+        view->setHtml(html.isEmpty() ? QStringLiteral("尚未记录事件") : html);
     }
     void graph()
     {
@@ -646,12 +660,16 @@ class Window : public QMainWindow
         {
             auto *page = new QWidget;
             auto *layout = new QVBoxLayout(page);
-            layout->addWidget(view, 1);
-            button(layout, "返回人物关系", [this, page] {
+            layout->setContentsMargins(22, 16, 22, 16);
+            auto *header = new QHBoxLayout;
+            layout->addLayout(header);
+            header->addWidget(sectionLabel("人物关系图"), 1);
+            button(header, "返回人物关系", [this, page] {
                 pages->setCurrentWidget(dossier);
                 pages->removeWidget(page);
                 page->deleteLater();
             });
+            layout->addWidget(view, 1);
             pages->addWidget(page);
             pages->setCurrentWidget(page);
         }
@@ -761,28 +779,6 @@ class Window : public QMainWindow
         });
     }
 
-    void proofread()
-    {
-        save();
-        QStringList issues;
-        auto query = book->run("SELECT title,body FROM chapters ORDER BY id");
-        QRegularExpression repeated("[，。；、]{2,}");
-        while (query.next())
-        {
-            auto lines = query.value(1).toString().split('\n');
-            for (qsizetype i = 0; i < lines.size(); ++i)
-            {
-                auto hits = repeated.globalMatch(lines.at(i));
-                while (hits.hasNext())
-                    issues << QString("%1，第 %2 行：请核对标点 %3")
-                                  .arg(query.value(0).toString())
-                                  .arg(i + 1)
-                                  .arg(hits.next().captured());
-            }
-        }
-        showText("整书基础校对 · 重复标点",
-                 issues.isEmpty() ? "未发现连续的逗号、句号、分号或顿号。" : issues.join("\n"));
-    }
     void newTemplate()
     {
         beginSheet("新建输出模板");
@@ -849,7 +845,7 @@ class Window : public QMainWindow
             }
             closeSheet();
             status->setText(backup ? "已保存书籍备份" : "全书 TXT 已导出");
-        });
+        })->setObjectName("primary");
     }
 
   public:
@@ -859,19 +855,19 @@ class Window : public QMainWindow
         setCentralWidget(pages);
         pages->addWidget(shelf);
         auto *intro = new QVBoxLayout(shelf);
-        intro->setContentsMargins(30, 22, 30, 22);
-        intro->addWidget(new MatrixBanner("墨序 · 书架"));
-        intro->addSpacing(18);
+        intro->setContentsMargins(22, 16, 22, 16);
         auto *shelfHome = new QWidget;
         shelfActions = new InlineActions(shelfHome);
         intro->addWidget(shelfActions, 1);
-        auto *library = new QVBoxLayout(shelfHome);
-        auto *actions = new QHBoxLayout;
-        library->addLayout(actions);
-        shelfHeading->setObjectName("sectionTitle");
-        actions->addWidget(shelfHeading, 1);
-        button(actions, "新建书籍", [this] { newBook(); });
+        auto *shelfColumns = new QHBoxLayout(shelfHome);
+        shelfColumns->setContentsMargins(0, 0, 0, 0);
+        shelfColumns->setSpacing(14);
+        auto *actions = panelColumn(shelfColumns, 0, true);
+        actions->parentWidget()->setFixedWidth(190);
+        actions->addWidget(new MatrixBanner("墨序 · 书架"));
+        button(actions, "新建书籍", [this] { newBook(); })->setObjectName("primary");
         button(actions, "打开书籍…", [this] { browseBooks(); });
+        actions->addStretch();
         button(actions, "设置保存目录", [this] { chooseStorage(); });
         button(actions, "AI 配置", [this] {
             auto *page = new AiConfig(sessionKeys, QSettings().value("writing/provider", "deepseek").toString(),
@@ -886,16 +882,24 @@ class Window : public QMainWindow
             pages->addWidget(page);
             pages->setCurrentWidget(page);
         });
+        auto *library = panelColumn(shelfColumns, 1);
+        shelfHeading->setObjectName("title");
+        library->addWidget(shelfHeading);
         recent->setViewMode(QListView::IconMode);
         recent->setMovement(QListView::Static);
         recent->setResizeMode(QListView::Adjust);
-        recent->setSpacing(9);
-        recent->setStyleSheet("QListWidget {background:#0b1711;border:1px solid #294134;padding:8px;} "
+        recent->setSpacing(12);
+        recent->setStyleSheet("QListWidget {background:transparent;border:none;padding:0;} "
                               "QListWidget::item {color:transparent;padding:0;border:0;} QListWidget::item:selected "
                               "{background:#20392b;color:transparent;}");
         library->addWidget(recent, 1);
+        emptyShelf->setObjectName("hint");
+        emptyShelf->setWordWrap(true);
+        emptyShelf->setAlignment(Qt::AlignCenter);
+        library->addWidget(emptyShelf, 1);
         library->addWidget(location);
         location->setObjectName("hint");
+        location->setWordWrap(true);
         connect(recent, &QListWidget::itemActivated, this,
                 [this](auto *i) { guard([&] { openBook(i->data(Qt::UserRole).toString()); }); });
         pages->addWidget(storage);
@@ -904,17 +908,24 @@ class Window : public QMainWindow
         auto *storageLayout = new QVBoxLayout(storage);
         storageLayout->addWidget(storageActions);
         auto *setup = new QVBoxLayout(storageHome);
-        setup->setContentsMargins(60, 40, 60, 40);
-        setup->setSpacing(18);
+        setup->setContentsMargins(22, 16, 22, 16);
         setup->addStretch();
-        setup->addWidget(new MatrixBanner("小说保存位置"));
-        setup->addWidget(directoryMessage);
+        auto *setupRow = new QHBoxLayout;
+        setup->addLayout(setupRow);
+        setupRow->addStretch();
+        auto *setupCard = panelColumn(setupRow, 0);
+        setupCard->parentWidget()->setMaximumWidth(720);
+        setupRow->addStretch();
+        setupCard->addWidget(sectionLabel("小说保存位置"));
+        setupCard->addWidget(directoryMessage);
+        directoryMessage->setWordWrap(true);
         auto *explanation = new QLabel("新书默认保存在这里。你可以随时从书架更改目录，已有书籍仍保留在原位置。");
         explanation->setWordWrap(true);
-        setup->addWidget(explanation);
+        explanation->setObjectName("hint");
+        setupCard->addWidget(explanation);
         auto *choices = new QHBoxLayout;
-        setup->addLayout(choices);
-        button(choices, "使用默认目录", [this] { setDirectory(defaultBooksPath()); });
+        setupCard->addLayout(choices);
+        button(choices, "使用默认目录", [this] { setDirectory(defaultBooksPath()); })->setObjectName("primary");
         button(choices, "选择自定义目录…", [this] {
             auto *fields = storageActions->begin("自定义小说保存目录");
             auto *picker =
@@ -936,9 +947,12 @@ class Window : public QMainWindow
         pages->addWidget(work);
         writerColumns = new QHBoxLayout(work);
         auto *cols = writerColumns;
-        auto *left = new QVBoxLayout;
-        cols->addLayout(left, 1);
-        left->addWidget(new QLabel("章节目录"));
+        cols->setContentsMargins(16, 12, 16, 8);
+        cols->setSpacing(12);
+        auto *left = panelColumn(cols, 0, true);
+        left->parentWidget()->setFixedWidth(178);
+        chapters->setObjectName("chapterList");
+        left->addWidget(sectionLabel("章节目录"));
         left->addWidget(chapters);
         button(left, "＋ 新章节", [this] {
             save();
@@ -954,14 +968,17 @@ class Window : public QMainWindow
                 chapters->setCurrentRow(chapters->count() - 1);
             });
         });
-        auto *right = new QVBoxLayout;
-        cols->addLayout(right, 4);
+        auto *right = panelColumn(cols, 5);
+        auto *titleBlock = new QVBoxLayout;
+        titleBlock->setSpacing(2);
         auto *chapterHeader = new QHBoxLayout;
         right->addLayout(chapterHeader);
         heading->setTextFormat(Qt::PlainText);
         heading->setWordWrap(true);
-        chapterHeader->addWidget(heading, 1);
-        chapterHeader->addWidget(chapterPosition);
+        chapterHeader->addLayout(titleBlock, 1);
+        chapterPosition->setObjectName("hint");
+        titleBlock->addWidget(chapterPosition);
+        titleBlock->addWidget(heading);
         button(chapterHeader, "改章名", [this] { renameChapter(); });
         auto *saveChapter = new QPushButton("保存");
         saveChapter->setObjectName("saveChapter");
@@ -983,9 +1000,11 @@ class Window : public QMainWindow
         tools->setMovable(false);
         tool("返回资料工作区", [this] { enterDossier(); });
         tool("AI 写作", [this] { aiWriting(); });
+        tools->addSeparator();
         tool("人物名字", [this] { insertPerson(); });
         tool("属性面板", [this] { panel(); });
         tool("记录事件", [this] { record(); });
+        tools->addSeparator();
         tool("时间轴", [this] { timeline(); });
         tool("关系图", [this] { graph(); });
         tool("历史版本", [this] { history(); });
@@ -994,7 +1013,6 @@ class Window : public QMainWindow
             button(sheet->form, "人物档案", [this] { enterDossier(1); });
             button(sheet->form, "人物关系", [this] { enterDossier(2); });
             button(sheet->form, "新建输出模板", [this] { newTemplate(); });
-            button(sheet->form, "整书基础校对", [this] { proofread(); });
             button(sheet->form, "备份整本书…", [this] { fileOutput(true); });
             button(sheet->form, "导出全书 TXT", [this] { fileOutput(false); });
         });
