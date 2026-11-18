@@ -199,5 +199,20 @@ int main(int argc, char **argv)
     if (verify.value("SELECT body FROM chapters WHERE id=1").toString() != "林澈获得了300积分。" ||
         verify.value("SELECT body FROM chapters WHERE id=2").toString() != "买下丹药。")
         return 5;
+    auto saved = [&] {
+        return verify.value("SELECT body FROM chapters WHERE id=2").toString() == editor->toPlainText();
+    };
+    editor->insertPlainText("又得一枚。");
+    QTest::keyClick(editor, Qt::Key_S, Qt::ControlModifier);
+    if (!saved())
+        return 37;
+    editor->insertPlainText("收入囊中。");
+    window.findChild<QPushButton *>("saveChapter")->click();
+    if (!saved())
+        return 38;
+    editor->insertPlainText("转身下山。");
+    app.applicationStateChanged(Qt::ApplicationInactive);
+    if (!saved())
+        return 39;
     return dialogs.shown.isEmpty() ? 0 : 22;
 }

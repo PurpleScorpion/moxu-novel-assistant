@@ -141,6 +141,7 @@ class Window : public QMainWindow
         if (!dirty || !book || !chapter)
             return;
         book->atomic([&] { book->save(chapter, editor->toPlainText()); });
+        timer.stop();
         dirty = false;
         status->setText("已保存");
     }
@@ -922,6 +923,15 @@ class Window : public QMainWindow
         chapterHeader->addWidget(heading, 1);
         chapterHeader->addWidget(chapterPosition);
         button(chapterHeader, "改章名", [this] { renameChapter(); });
+        auto *saveChapter = new QPushButton("保存");
+        saveChapter->setObjectName("saveChapter");
+        saveChapter->setToolTip("立即保存当前章节（Ctrl+S）");
+        chapterHeader->addWidget(saveChapter);
+        auto saveNow = [this] {
+            save();
+            status->setText("已保存");
+        };
+        connect(saveChapter, &QPushButton::clicked, this, [this, saveNow] { guard(saveNow); });
         connect(chapters, &QListWidget::itemDoubleClicked, this, [this] { guard([this] { renameChapter(); }); });
         right->addWidget(editor);
         heading->setObjectName("title");
@@ -932,7 +942,6 @@ class Window : public QMainWindow
         tools = addToolBar("写作");
         tools->setMovable(false);
         tool("返回资料工作区", [this] { enterDossier(); });
-        tool("保存", [this] { save(); });
         tool("AI 写作", [this] { aiWriting(); });
         tool("人物名字", [this] { insertPerson(); });
         tool("属性面板", [this] { panel(); });
@@ -962,21 +971,25 @@ class Window : public QMainWindow
         });
         connect(editor, &QPlainTextEdit::textChanged, this, [this] {
             dirty = true;
-            status->setText("待保存");
+            status->setText("等待自动保存…");
             if (!timer.isActive())
                 timer.start(1800);
         });
         timer.setSingleShot(true);
         connect(&timer, &QTimer::timeout, this, [this] { guard([this] { save(); }); });
-        connect(new QShortcut(QKeySequence::Save, this), &QShortcut::activated, this, [this] {
-            guard([this] {
+        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+            if (state != Qt::ApplicationActive && dirty && pages->currentWidget() == writer)
+                guard([this] { save(); });
+        });
+        connect(new QShortcut(QKeySequence::Save, this), &QShortcut::activated, this, [this, saveNow] {
+            guard([this, saveNow] {
                 if (pages->currentWidget() == dossier)
                 {
                     dossier->flush();
                     setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
                 }
-                else
-                    save();
+                else if (pages->currentWidget() == writer)
+                    saveNow();
             });
         });
         dossier = new Dossier(
