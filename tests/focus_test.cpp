@@ -27,6 +27,13 @@ void click(QWidget &parent, QString label)
         }
     throw std::runtime_error(("未找到按钮 " + label).toStdString());
 }
+QComboBox *ledgerChapterChoice(QWidget &window)
+{
+    for (auto *combo : visible<QComboBox>(window))
+        if (combo->objectName() == "ledgerChapter")
+            return combo;
+    throw std::runtime_error("账本缺少目标章节");
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -87,6 +94,11 @@ int main(int argc, char **argv)
         options.at(1)->setCurrentIndex(1);
         check(preview()->toPlainText() == "苏禾 / 金丹 / 0", "切换后预览错误");
         preview()->setPlainText("取消草稿");
+        click(sheet(), "查看章节快照");
+        check(editor->isVisible() && sheet().findChild<QTextBrowser *>("snapshotReport")->isVisible(),
+              "查阅人物快照离开了正文");
+        click(sheet(), "返回属性面板");
+        check(preview()->toPlainText() == "取消草稿", "查看快照后丢失面板草稿");
         click(sheet(), "收起");
         check(editor->toPlainText() == "开头原文结尾", "取消后正文变更");
         action("属性面板");
@@ -96,6 +108,11 @@ int main(int argc, char **argv)
         action("记录事件");
         auto *desc = sheet().findChild<QLineEdit *>("eventDescription");
         desc->setText("完成任务");
+        action("记录事件");
+        check(desc->isVisible() && desc->text() == "完成任务", "重复点击工具清空了事件草稿");
+        action("返回资料工作区");
+        click(window, "进入专注写作");
+        check(desc->isVisible() && desc->text() == "完成任务", "切换模式后丢失了事件草稿");
         const auto editorWidth = editor->width();
         window.findChild<QPushButton *>("collapseChapters")->click();
         QApplication::processEvents();
@@ -105,7 +122,7 @@ int main(int argc, char **argv)
         click(window, "展开目录");
         check(desc->isVisible() && desc->text() == "完成任务", "展开章节目录关闭了事件侧栏");
         click(sheet(), "新建资源");
-        check(!desc->isVisible(), "创建资源未进入独立页面");
+        check(!desc->isVisible() && editor->isVisible(), "新建资源未保留正文工作区");
         click(window, "返回");
         check(desc->isVisible() && desc->text() == "完成任务", "返回后事件草稿丢失");
         click(sheet(), "新建资源");
@@ -215,6 +232,10 @@ int main(int argc, char **argv)
         check(ledger->rowCount() == 30, "账本第一页条数错误");
         click(window, "下一页");
         check(ledger->rowCount() == 4 && ledger->item(3, 4)->text() == "31", "翻页行数或跨页余额错误");
+        click(window, "记录事件");
+        click(window, "返回账本");
+        check(ledger->isVisible() && ledger->rowCount() == 4 && ledger->item(3, 4)->text() == "31",
+              "取消记事后账本翻页位置丢失");
         click(window, "上一页");
         check(ledger->rowCount() == 30 && ledger->item(0, 5)->text() == "完成任务", "上一页未恢复结果");
         click(window, "进入专注写作");
@@ -306,9 +327,17 @@ int main(int argc, char **argv)
         action("返回资料工作区");
         window.findChild<QListWidget *>("navigation")->setCurrentRow(3);
         click(window, "记录事件");
-        setMode("获得道具");
-        sheet().findChild<QLineEdit *>("eventSubject")->setText("盘古幡");
-        click(sheet(), "保存事件");
+        check(!editor->isVisible() && window.findChild<QListWidget *>("navigation")->isVisible(),
+              "账本记事跳到了写作模式");
+        auto *ledgerForm = ledgerChapterChoice(window)->parentWidget();
+        ledgerForm->findChild<QComboBox *>("eventKind")->setCurrentText("获得道具");
+        ledgerForm->findChild<QLineEdit *>("eventSubject")->setText("盘古幡");
+        ledgerForm->findChild<QCheckBox *>()->setChecked(true);
+        click(window, "保存事件");
+        check(ledger->isVisible() && editor->toPlainText().endsWith("获得了盘古幡") &&
+                  verify.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText(),
+              "保存后未回到账本或正文不同步");
+        click(window, "进入专注写作");
         action("记录事件");
         setMode("转赠道具");
         check(sheet().findChild<QComboBox *>("eventKnown")->currentText() == "盘古幡", "道具无法转赠");
@@ -350,19 +379,21 @@ int main(int argc, char **argv)
         check(preview()->toPlainText() == "0 / 无", "一次性卷轴用后仍出现在库存");
         click(sheet(), "收起");
         action("剧情大事");
-        window.findChild<QLineEdit *>("plotArcName")->setText("玄武门之变");
+        check(editor->isVisible(), "记录剧情大事离开了正文");
+        sheet().findChild<QLineEdit *>("plotArcName")->setText("玄武门之变");
         click(window, "保存节点");
-        auto *strand = window.findChild<QComboBox *>("plotStrand");
+        auto *strand = sheet().findChild<QComboBox *>("plotStrand");
         strand->setCurrentIndex(1);
-        window.findChild<QLineEdit *>("plotStrandName")->setText("宫门部署");
+        sheet().findChild<QLineEdit *>("plotStrandName")->setText("宫门部署");
         click(window, "保存节点");
         check(strand->currentData().toString() == "宫门部署", "支线未保存或未选中");
-        click(window, "进入专注写作");
+        click(sheet(), "收起");
         action("时间轴");
         check(visible<QTextEdit>(sheet()).first()->toPlainText().contains("玄武门之变 · 宫门部署 · 开始"),
               "时间轴缺少并行剧情");
         action("返回资料工作区");
         auto *nav = window.findChild<QListWidget *>("navigation");
+        check(nav->currentRow() == 3 && ledger->isVisible(), "返回资料工作区未回到原先的账本");
         nav->setCurrentItem(nav->findItems("资源管理", Qt::MatchExactly).first());
         auto *catalog = window.findChild<QTableWidget *>("catalogTable");
         auto pickCatalog = [&](QString text) {
@@ -403,11 +434,11 @@ int main(int argc, char **argv)
         verify.supplyEvent(2, 1, SupplyAction::Receive, "蓝瓶", 3, 0, "买药");
         action("返回资料工作区");
         nav->setCurrentRow(1);
-        auto *snapshotChapter = window.findChild<QComboBox *>("snapshotChapter");
         auto *tabs = window.findChild<QTabWidget *>("personTabs");
         check(tabs, "缺少人物档案标签页");
         tabs->setCurrentIndex(1);
-        auto *report = window.findChild<QTextBrowser *>("snapshotReport");
+        auto *snapshotChapter = tabs->findChild<QComboBox *>("snapshotChapter");
+        auto *report = tabs->findChild<QTextBrowser *>("snapshotReport");
         check(report->isVisible(), "未显示章节快照");
         snapshotChapter->setCurrentIndex(0);
         auto first = report->toPlainText();
@@ -418,11 +449,28 @@ int main(int argc, char **argv)
         check(report->toPlainText().contains("蓝瓶") && report->toPlainText().contains("22"), "第二章库存或收支未更新");
         window.findChild<QListWidget *>("personList")->setCurrentRow(1);
         check(report->toPlainText().contains("盘古幡") && !report->toPlainText().contains("上清仙法"), "快照串用人物");
+        nav->setCurrentRow(2);
+        click(window, "查看关系图");
+        check(nav->isVisible() && !visible<QGraphicsView>(window).isEmpty(), "资料关系图跳出了侧栏");
+        click(window, "返回关系列表");
+        nav->setCurrentRow(3);
+        click(window, "记录事件");
+        auto *which = ledgerChapterChoice(window);
+        which->setCurrentIndex(1);
+        auto *entry = which->parentWidget();
+        entry->findChild<QComboBox *>("eventKind")->setCurrentText("普通事件");
+        entry->findChild<QLineEdit *>("eventDescription")->setText("另章记事");
+        entry->findChild<QCheckBox *>()->setChecked(true);
+        auto currentText = editor->toPlainText();
+        click(window, "保存事件");
+        check(ledger->isVisible() && editor->toPlainText() == currentText &&
+                  verify.value("SELECT body FROM chapters WHERE id=2").toString().endsWith("另章记事"),
+              "追加正文未写入所选章节");
         check(watch.shown.isEmpty(), "专注写作中出现了对话框");
     }
     catch (const std::exception &e)
     {
-        fprintf(stderr, "%s\n", e.what());
+        qCritical("%s", e.what());
         return 1;
     }
     return 0;

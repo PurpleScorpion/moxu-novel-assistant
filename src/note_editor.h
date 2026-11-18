@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "inline_files.h"
 #include "interface.h"
 #include "save_status.h"
@@ -13,7 +14,7 @@ class NoteEditor : public QWidget
     QListWidget *entries = new QListWidget;
     QLineEdit *title = new QLineEdit;
     QPlainTextEdit *body = new QPlainTextEdit;
-    QComboBox *chapters = new QComboBox;
+    QComboBox *chapters = new DownwardCombo;
     SaveStatus *status = new SaveStatus;
     QPushButton *removeButton = new QPushButton("删除");
     WritingNote saved;
@@ -126,7 +127,7 @@ class NoteEditor : public QWidget
                 auto *fields = actions->begin("导入 SKILL.md");
                 auto *picker = new InlinePathPicker(PathUse::OpenFile, skillFolder(), ".md");
                 fields->addWidget(picker, 1);
-                auto *destination = new QComboBox;
+                auto *destination = new DownwardCombo;
                 destination->setObjectName("importScope");
                 destination->addItems({scopeName(NoteScope::Global), scopeName(NoteScope::Book)});
                 destination->setCurrentIndex(this->scope == NoteScope::Global ? 0 : 1);

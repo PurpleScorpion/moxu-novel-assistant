@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "book.h"
 #include "character_snapshot.h"
 #include "resource_catalog.h"
@@ -29,9 +30,11 @@ class Dossier : public QWidget
     ResourceCatalog *catalogPage = new ResourceCatalog;
     CharacterSnapshot *snapshot = new CharacterSnapshot;
     int preferredSnapshotChapter = 0;
-    QComboBox *from = new QComboBox, *to = new QComboBox;
+    QComboBox *from = new DownwardCombo, *to = new DownwardCombo;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
+    QStackedWidget *relationViews = new QStackedWidget;
+    QPushButton *graphToggle = new QPushButton("查看关系图");
     QPushButton *saveRelation;
     int selected = 0;
     QList<NoteEditor *> notePages;
@@ -154,6 +157,7 @@ class Dossier : public QWidget
         }
         else if (page == 2)
         {
+            closeRelationGraph();
             edges->clear();
             from->clear();
             to->clear();
@@ -173,7 +177,7 @@ class Dossier : public QWidget
                                q.value(2).toString());
         }
         else if (page == 3)
-            ledger->load(*book);
+            ledger->load(*book, preferredSnapshotChapter);
         else if (page == plotIndex)
             plots->load(*book);
         else if (page == plotIndex + 1)
@@ -184,9 +188,34 @@ class Dossier : public QWidget
 
   public:
     static constexpr int plotIndex = 7;
+    int currentPage() const
+    {
+        return details->currentIndex();
+    }
+    void showRelationGraph(QGraphicsView *view)
+    {
+        relationViews->addWidget(view);
+        relationViews->setCurrentWidget(view);
+        graphToggle->setText("返回关系列表");
+    }
+    void closeRelationGraph()
+    {
+        if (relationViews->count() < 2)
+            return;
+        auto *view = relationViews->widget(1);
+        relationViews->setCurrentWidget(edges);
+        relationViews->removeWidget(view);
+        view->deleteLater();
+        graphToggle->setText("查看关系图");
+    }
+    void resetBook()
+    {
+        ledger->resetBook();
+        catalogPage->resetBook();
+    }
     Dossier(std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
-            std::function<void(QString)> rename, OpenResourcePage open = {}, std::function<void()> record = {})
-        : renameBook(std::move(rename)), ledger(new EventLedger(open, record))
+            std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {})
+        : renameBook(std::move(rename)), ledger(new EventLedger(appended))
     {
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(22, 16, 22, 16);
@@ -313,8 +342,15 @@ class Dossier : public QWidget
         auto *relationHeader = new QHBoxLayout;
         links->addLayout(relationHeader);
         relationHeader->addWidget(sectionLabel("关系列表"), 1);
-        connect(btn("查看关系图", relationHeader), &QPushButton::clicked, this, [=, this] { safe(graph); });
-        links->addWidget(edges, 1);
+        relationHeader->addWidget(graphToggle);
+        connect(graphToggle, &QPushButton::clicked, this, [=, this] {
+            if (relationViews->currentWidget() == edges)
+                safe(graph);
+            else
+                closeRelationGraph();
+        });
+        relationViews->addWidget(edges);
+        links->addWidget(relationViews, 1);
         auto *line = new QHBoxLayout;
         links->addLayout(line);
         line->addWidget(from);

@@ -29,6 +29,8 @@ class Window : public QMainWindow
     SaveStatus *status = new SaveStatus;
     QHBoxLayout *writerColumns;
     WriterSheet *sheet = nullptr;
+    QPointer<QWidget> writerFocus;
+    QAction *activeSheetTool = nullptr;
     QTextCursor insertion;
     QString bookPath;
     QToolBar *tools;
@@ -40,6 +42,11 @@ class Window : public QMainWindow
     {
         if (!sheet)
             return;
+        if (activeSheetTool)
+        {
+            activeSheetTool->setChecked(false);
+            activeSheetTool = nullptr;
+        }
         sheet->hide();
         writerColumns->removeWidget(sheet);
         sheet->deleteLater();
@@ -59,23 +66,28 @@ class Window : public QMainWindow
     }
     void aiWriting()
     {
-        closeSheet();
         save();
+        QPointer<QWidget> previousFocus = QApplication::focusWidget();
         auto target = editor->textCursor();
         QString excerpt =
             target.hasSelection() ? target.selectedText() : editor->toPlainText().left(target.position()).right(3000);
         excerpt.replace(QChar::ParagraphSeparator, '\n');
-        auto back = [this] {
+        auto back = [this, previousFocus] {
             auto *panel = pages->currentWidget();
             pages->setCurrentWidget(writer);
             pages->removeWidget(panel);
             panel->deleteLater();
             tools->show();
             statusBar()->show();
-            editor->setFocus();
+            if (previousFocus && writer->isAncestorOf(previousFocus) && previousFocus->isVisible())
+                previousFocus->setFocus();
+            else
+                editor->setFocus();
         };
         auto accept = [this, target, back](const QString &text) mutable {
             target.insertText(text);
+            if (sheet)
+                insertion = target;
             editor->setTextCursor(target);
             back();
             guard([this] { save(); });
@@ -97,7 +109,7 @@ class Window : public QMainWindow
         catch (const std::exception &e)
         {
             const QString error = QString::fromUtf8(e.what());
-            if (sheet)
+            if (sheet && pages->currentWidget() == writer)
                 sheet->report(error);
             else if (pages->currentWidget() == storage)
                 directoryMessage->setText(error);
@@ -116,9 +128,24 @@ class Window : public QMainWindow
         connect(btn, &QPushButton::clicked, this, [this, action] { guard(action); });
         return btn;
     }
-    void tool(const QString &title, Action action)
+    void tool(const QString &title, Action action, bool opensSheet = true)
     {
-        connect(tools->addAction(title), &QAction::triggered, this, [this, action] { guard(action); });
+        auto *entry = tools->addAction(title);
+        entry->setCheckable(opensSheet);
+        connect(entry, &QAction::triggered, this, [=, this] {
+            if (opensSheet && activeSheetTool == entry && sheet)
+            {
+                entry->setChecked(true);
+                return;
+            }
+            const bool completed = guard(action);
+            if (opensSheet)
+            {
+                entry->setChecked(completed && sheet);
+                if (completed && sheet)
+                    activeSheetTool = entry;
+            }
+        });
     }
     QComboBox *personChoice()
     {
@@ -194,6 +221,10 @@ class Window : public QMainWindow
     {
         save();
         status->pending.stop();
+        closeSheet();
+        writerFocus.clear();
+        if (dossier)
+            dossier->resetBook();
         chapter = 0;
         book.reset();
         lock.reset();
@@ -470,7 +501,8 @@ class Window : public QMainWindow
     void enterDossier(int page = 0)
     {
         save();
-        closeSheet();
+        if (pages->currentWidget() == writer)
+            writerFocus = writer->focusWidget();
         dossier->enter(book.get(), page, chapter);
         setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
         pages->setCurrentWidget(dossier);
@@ -501,39 +533,12 @@ class Window : public QMainWindow
         tools->hide();
         directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
     }
-    void openResourcePage(bool numericOnly, std::function<void(const CatalogEntry &)> created)
-    {
-        auto *origin = pages->currentWidget();
-        auto *page = new QWidget;
-        auto *layout = new QVBoxLayout(page);
-        layout->setContentsMargins(32, 24, 32, 24);
-        auto back = [this, origin, page] {
-            pages->setCurrentWidget(origin);
-            pages->removeWidget(page);
-            page->deleteLater();
-            tools->setVisible(origin == writer);
-            statusBar()->setVisible(origin == writer);
-        };
-        auto *form = new CatalogEditor(
-            *book, {}, numericOnly,
-            [back, created](const CatalogEntry &entry) {
-                back();
-                created(entry);
-            },
-            back);
-        layout->addWidget(form, 1);
-        pages->addWidget(page);
-        pages->setCurrentWidget(page);
-        tools->hide();
-        statusBar()->hide();
-        form->setFocus();
-    }
-    void record(bool insertInText = true)
+    void record()
     {
         beginSheet("记录事件 · 第 " + QString::number(chapters->currentRow() + 1) + " 章");
-        auto *form =
-            new EventForm(*book, chapter, [this](bool numericOnly, auto done) { openResourcePage(numericOnly, done); });
-        form->insert->setChecked(insertInText);
+        auto *form = new EventForm(*book, chapter, [this](bool numericOnly, auto done) {
+            openCatalogCreator(sheet->pages, *book, numericOnly, done);
+        });
         sheet->form->addWidget(form);
         button(sheet->form, "保存事件", [this, form] {
             save();
@@ -611,6 +616,26 @@ class Window : public QMainWindow
     {
         beginSheet("属性面板");
         auto *people = personChoice();
+        button(sheet->form, "查看章节快照", [this, people] {
+            auto *stack = sheet->pages;
+            auto *detail = new QWidget;
+            auto *layout = new QVBoxLayout(detail);
+            button(layout, "返回属性面板", [stack, detail] {
+                stack->setCurrentIndex(0);
+                stack->removeWidget(detail);
+                detail->deleteLater();
+            });
+            auto *title = new QLabel(people->currentText() + " · 章节快照");
+            title->setTextFormat(Qt::PlainText);
+            title->setObjectName("sectionTitle");
+            layout->addWidget(title);
+            auto *snapshot = new CharacterSnapshot;
+            layout->addWidget(snapshot, 1);
+            snapshot->load(*book, chapter);
+            snapshot->selectPerson(people->currentData().toInt());
+            stack->addWidget(detail);
+            stack->setCurrentWidget(detail);
+        });
         auto *templates = sheet->choice("输出模板", book->run("SELECT id,title FROM templates ORDER BY id"));
         auto *preview = sheet->textArea("预览（可直接编辑）");
         auto refresh = [=, this] {
@@ -682,22 +707,7 @@ class Window : public QMainWindow
             sheet->form->addWidget(view, 1);
         }
         else
-        {
-            auto *page = new QWidget;
-            auto *layout = new QVBoxLayout(page);
-            layout->setContentsMargins(22, 16, 22, 16);
-            auto *header = new QHBoxLayout;
-            layout->addLayout(header);
-            header->addWidget(sectionLabel("人物关系图"), 1);
-            button(header, "返回人物关系", [this, page] {
-                pages->setCurrentWidget(dossier);
-                pages->removeWidget(page);
-                page->deleteLater();
-            });
-            layout->addWidget(view, 1);
-            pages->addWidget(page);
-            pages->setCurrentWidget(page);
-        }
+            dossier->showRelationGraph(view);
         auto q = book->run("SELECT id,name FROM people ORDER BY id");
         QVector<QPair<int, QString>> people;
         while (q.next())
@@ -1048,21 +1058,26 @@ class Window : public QMainWindow
         editor->document()->setDocumentMargin(26);
         tools = addToolBar("写作");
         tools->setMovable(false);
-        tool("返回资料工作区", [this] { enterDossier(); });
-        tool("AI 写作", [this] { aiWriting(); });
+        tool("返回资料工作区", [this] { enterDossier(dossier->currentPage()); }, false);
+        tool("AI 写作", [this] { aiWriting(); }, false);
         tools->addSeparator();
         tool("人物名字", [this] { insertPerson(); });
         tool("属性面板", [this] { panel(); });
         tool("记录事件", [this] { record(); });
         tools->addSeparator();
-        tool("剧情大事", [this] { enterDossier(Dossier::plotIndex); });
+        tool("剧情大事", [this] {
+            beginSheet("剧情大事");
+            auto *plots = new PlotPage;
+            sheet->form->addWidget(plots, 1);
+            plots->load(*book, chapter);
+        });
         tool("时间轴", [this] { timeline(); });
         tool("关系图", [this] { graph(); });
         tool("历史版本", [this] { history(); });
         tool("资料与导出", [this] {
             beginSheet("资料与导出");
-            button(sheet->form, "人物档案", [this] { enterDossier(1); });
-            button(sheet->form, "人物关系", [this] { enterDossier(2); });
+            button(sheet->form, "编辑人物档案（资料区）", [this] { enterDossier(1); });
+            button(sheet->form, "编辑人物关系（资料区）", [this] { enterDossier(2); });
             button(sheet->form, "新建输出模板", [this] { newTemplate(); });
             button(sheet->form, "备份整本书…", [this] { fileOutput(true); });
             button(sheet->form, "导出全书 TXT", [this] { fileOutput(false); });
@@ -1102,18 +1117,33 @@ class Window : public QMainWindow
             pages->setCurrentWidget(writer);
             tools->show();
             statusBar()->show();
-            editor->setFocus();
+            if (writerFocus && writerFocus->isVisible() && writerFocus->isEnabled())
+                writerFocus->setFocus();
+            else
+                editor->setFocus();
         };
         dossier = new Dossier(
             focusWriter, [this] { showShelf(); }, [this] { graph(); },
             [this](QString n) { setWindowTitle(n + " · 墨序"); },
-            [this](bool numericOnly, auto done) { openResourcePage(numericOnly, done); },
-            [this, focusWriter] {
-                guard([&] {
-                    dossier->flush();
-                    focusWriter();
-                    record(false);
-                });
+            [this](int target, const QString &addition) {
+                if (target != chapter)
+                    return;
+                QSignalBlocker block(editor);
+                const int scroll = editor->verticalScrollBar()->value();
+                const auto cursor = editor->textCursor();
+                const int anchor = cursor.anchor(), pos = cursor.position();
+                if (sheet)
+                    insertion.setKeepPositionOnInsert(true);
+                QTextCursor tail(editor->document());
+                tail.movePosition(QTextCursor::End);
+                tail.insertText(addition);
+                if (sheet)
+                    insertion.setKeepPositionOnInsert(false);
+                QTextCursor restored(editor->document());
+                restored.setPosition(anchor);
+                restored.setPosition(pos, QTextCursor::KeepAnchor);
+                editor->setTextCursor(restored);
+                editor->verticalScrollBar()->setValue(scroll);
             });
         pages->addWidget(dossier);
         showShelf();

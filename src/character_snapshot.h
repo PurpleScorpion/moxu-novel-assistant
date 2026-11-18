@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "book.h"
 #include <QtWidgets>
 
@@ -7,7 +8,7 @@ class CharacterSnapshot : public QWidget
     Book *book = nullptr;
     int person = 0;
     QString file;
-    QComboBox *chapters = new QComboBox;
+    QComboBox *chapters = new DownwardCombo;
     QTextBrowser *report = new QTextBrowser;
 
     void refresh()

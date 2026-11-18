@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "book.h"
 #include <QtWidgets>
 
@@ -15,7 +16,7 @@ inline QString resourceKindLabel(const QString &kind)
 
 class CatalogEditor : public QWidget
 {
-    QComboBox *kind = new QComboBox;
+    QComboBox *kind = new DownwardCombo;
     QLineEdit *name = new QLineEdit, *level = new QLineEdit, *cooldown = new QLineEdit;
     QSpinBox *uses = new QSpinBox;
     QLabel *notice = new QLabel;
@@ -90,6 +91,28 @@ class CatalogEditor : public QWidget
         setFocusProxy(name);
     }
 };
+
+inline void openCatalogCreator(QStackedWidget *stack, Book &book, bool numericOnly,
+                               std::function<void(const CatalogEntry &)> created)
+{
+    auto *origin = stack->currentWidget();
+    auto back = [stack, origin] {
+        auto *form = stack->currentWidget();
+        stack->setCurrentWidget(origin);
+        stack->removeWidget(form);
+        form->deleteLater();
+    };
+    auto *form = new CatalogEditor(
+        book, {}, numericOnly,
+        [back, created](const CatalogEntry &entry) {
+            back();
+            created(entry);
+        },
+        back);
+    stack->addWidget(form);
+    stack->setCurrentWidget(form);
+    form->setFocus();
+}
 
 class ResourceCatalog : public QStackedWidget
 {
@@ -189,11 +212,21 @@ class ResourceCatalog : public QStackedWidget
             }
         });
     }
+    void resetBook()
+    {
+        closeEditor();
+        book = nullptr;
+    }
     void load(Book &source)
     {
+        if (book == &source && currentIndex() != 0)
+            return;
+        CatalogEntry selected;
+        if (book == &source && table->currentRow() >= 0)
+            selected = entries.value(table->currentRow());
         closeEditor();
         book = &source;
         notice->clear();
-        refresh();
+        refresh(selected);
     }
 };

@@ -1,10 +1,12 @@
 #pragma once
+#include "downward_combo.h"
 #include "book.h"
 #include <QtWidgets>
 
 class WriterSheet : public QScrollArea
 {
   public:
+    QStackedWidget *pages = new QStackedWidget;
     QVBoxLayout *form;
     QLabel *message;
     WriterSheet(const QString &title, std::function<void()> close)
@@ -14,7 +16,8 @@ class WriterSheet : public QScrollArea
         setMinimumWidth(290);
         auto *content = new QWidget;
         content->setObjectName("sheetContent");
-        setWidget(content);
+        pages->addWidget(content);
+        setWidget(pages);
         form = new QVBoxLayout(content);
         form->setContentsMargins(15, 14, 15, 16);
         form->setSpacing(10);
@@ -45,7 +48,7 @@ class WriterSheet : public QScrollArea
     QComboBox *choice(const QString &label, QSqlQuery rows)
     {
         form->addWidget(new QLabel(label));
-        auto *list = new QComboBox;
+        auto *list = new DownwardCombo;
         list->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         form->addWidget(list);
         QHash<QString, int> counts;

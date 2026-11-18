@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "book.h"
 #include <QtWidgets>
 
@@ -6,7 +7,8 @@ class PlotPage : public QWidget
 {
     Book *book = nullptr;
     QString file;
-    QComboBox *arcs = new QComboBox, *strands = new QComboBox, *chapters = new QComboBox, *phases = new QComboBox;
+    QComboBox *arcs = new DownwardCombo, *strands = new DownwardCombo, *chapters = new DownwardCombo,
+              *phases = new DownwardCombo;
     QLineEdit *arcName = new QLineEdit, *strandName = new QLineEdit, *note = new QLineEdit;
     QTableWidget *history = new QTableWidget;
     QLabel *notice = new QLabel;
@@ -165,11 +167,11 @@ class PlotPage : public QWidget
             if (arcs->count() > 1)
                 arcs->setCurrentIndex(1);
         }
-        else if (!newArc())
+        else
         {
             const bool draftingStrand = newStrand();
             const auto phase = phases->currentText();
-            showArc(strands->currentData().toString());
+            loadArcs(arcs->currentData().toString(), strands->currentData().toString());
             if (draftingStrand)
                 strands->setCurrentIndex(1);
             phases->setCurrentText(phase);

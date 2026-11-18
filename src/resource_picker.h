@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "resource_catalog.h"
 #include <QtWidgets>
 
@@ -10,7 +11,7 @@ class ResourcePicker : public QWidget
     Book *book = nullptr;
 
   public:
-    QComboBox *choices = new QComboBox;
+    QComboBox *choices = new DownwardCombo;
     ResourcePicker(bool includeAll, OpenResourcePage open) : includeAll(includeAll)
     {
         auto *row = new QHBoxLayout(this);

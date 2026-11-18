@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "resource_picker.h"
 
 class EventForm : public QWidget
@@ -19,13 +20,14 @@ class EventForm : public QWidget
     Book &book;
     int chapter;
     QFormLayout *fields = new QFormLayout;
-    QComboBox *type = new QComboBox, *actor = new QComboBox, *recipient = new QComboBox, *known = new QComboBox;
+    QComboBox *type = new DownwardCombo, *actor = new DownwardCombo, *recipient = new DownwardCombo,
+              *known = new DownwardCombo;
     ResourcePicker *resources;
-    QComboBox *supply = new QComboBox;
+    QComboBox *supply = new DownwardCombo;
     QSpinBox *quantity = new QSpinBox;
     QMap<QString, qint64> inventory, recipientInventory;
     QSpinBox *delta = new QSpinBox, *uses = new QSpinBox;
-    QComboBox *subject = new QComboBox;
+    QComboBox *subject = new DownwardCombo;
     QList<CatalogEntry> subjects;
     QLineEdit *level = new QLineEdit, *cooldown = new QLineEdit, *description = new QLineEdit;
     QPlainTextEdit *preview = new QPlainTextEdit;
@@ -133,6 +135,62 @@ class EventForm : public QWidget
         if (mode() == GiveSupply)
             recipientInventory = book.supplyCounts(recipient->currentData().toInt(), chapter);
     }
+    void loadActors()
+    {
+        auto previous = actor->currentData();
+        QSignalBlocker block(actor);
+        actor->clear();
+        auto people = book.run("SELECT id,name,count(*) OVER(PARTITION BY name) FROM people ORDER BY name,id");
+        while (people.next())
+        {
+            auto label = people.value(1).toString();
+            if (people.value(2).toInt() > 1)
+                label += " · #" + people.value(0).toString();
+            actor->addItem(label, people.value(0));
+        }
+        actor->setCurrentIndex(qMax(0, actor->findData(previous)));
+    }
+    void loadSubjects(const QString &draft)
+    {
+        QSignalBlocker block(subject);
+        subjects = book.catalog(mode() == Acquire ? "item" : "skill");
+        subject->clear();
+        for (const auto &entry : subjects)
+            subject->addItem(entry.name);
+        subject->setCurrentIndex(subject->findText(draft));
+        subject->setEditText(draft);
+        subject->lineEdit()->setPlaceholderText("选择本书资源，或直接输入名称");
+    }
+    void showEvent(QShowEvent *event) override
+    {
+        QWidget::showEvent(event);
+        try
+        {
+            const auto selected = known->currentText(), oldLevel = level->text(), oldCooldown = cooldown->text();
+            const auto target = recipient->currentData();
+            loadActors();
+            resources->load(book, resource());
+            if (mode() == Acquire || mode() == Learn)
+                loadSubjects(subject->currentText());
+            loadChoices();
+            if (!selected.isEmpty() && known->findText(selected) >= 0)
+            {
+                known->setCurrentText(selected);
+                if (mode() == Advance)
+                {
+                    level->setText(oldLevel);
+                    cooldown->setText(oldCooldown);
+                }
+            }
+            if (target.isValid() && recipient->findData(target) >= 0)
+                recipient->setCurrentIndex(recipient->findData(target));
+            refreshPreview();
+        }
+        catch (const std::exception &e)
+        {
+            preview->setPlainText(QString::fromUtf8(e.what()));
+        }
+    }
     void changeMode()
     {
         const auto m = mode();
@@ -149,21 +207,15 @@ class EventForm : public QWidget
         subjectLabel->setText(m == Acquire ? "道具名称" : "技能／功法名称");
         if (m == Acquire || m == Learn)
         {
-            QSignalBlocker block(subject);
-            subject->clear();
             try
             {
-                subjects = book.catalog(m == Acquire ? "item" : "skill");
+                loadSubjects({});
             }
             catch (const std::exception &e)
             {
                 preview->setPlainText(QString::fromUtf8(e.what()));
                 return;
             }
-            for (const auto &entry : subjects)
-                subject->addItem(entry.name);
-            subject->setCurrentIndex(-1);
-            subject->lineEdit()->setPlaceholderText("选择本书资源，或直接输入名称");
             if (m == Learn)
             {
                 level->clear();
@@ -239,6 +291,11 @@ class EventForm : public QWidget
 
   public:
     QCheckBox *insert = new QCheckBox("同时插入本章正文");
+    void setChapter(int id)
+    {
+        chapter = id;
+        loadChoices();
+    }
     EventForm(Book &book, int chapter, OpenResourcePage open)
         : book(book), chapter(chapter), resources(new ResourcePicker(false, open))
     {
@@ -253,14 +310,7 @@ class EventForm : public QWidget
         type->setMaxVisibleItems(12);
         fields->addRow("事件类型", type);
         actor->setObjectName("eventActor");
-        auto people = book.run("SELECT id,name,count(*) OVER(PARTITION BY name) FROM people ORDER BY name,id");
-        while (people.next())
-        {
-            auto label = people.value(1).toString();
-            if (people.value(2).toInt() > 1)
-                label += " · #" + people.value(0).toString();
-            actor->addItem(label, people.value(0));
-        }
+        loadActors();
         fields->addRow("人物", actor);
         resources->load(book);
         fields->addRow("资源", resources);

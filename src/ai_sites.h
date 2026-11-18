@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "interface.h"
 #include <QtNetwork>
 #include <QtWidgets>
@@ -160,7 +161,7 @@ class AiConfig : public QWidget
     QListWidget *list = new QListWidget;
     QLineEdit *name = new QLineEdit, *address = new QLineEdit, *key = new QLineEdit;
     QPlainTextEdit *models = new QPlainTextEdit;
-    QComboBox *protocol = new QComboBox;
+    QComboBox *protocol = new DownwardCombo;
     QCheckBox *remember = new QCheckBox("在此电脑记住密钥（Windows 凭据管理器）");
     QLabel *notice = new QLabel;
     QPushButton *useGlm = new QPushButton("保存并设为写作接口");

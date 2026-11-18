@@ -40,6 +40,31 @@ int main(int argc, char **argv)
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.path());
     try
     {
+        {
+            QWidget host(nullptr, Qt::FramelessWindowHint);
+            DownwardCombo combo;
+            combo.setParent(&host);
+            const auto desktop = QGuiApplication::primaryScreen()->availableGeometry();
+            host.setGeometry(desktop.center().x() - 100, desktop.bottom() - 95, 200, 92);
+            combo.setGeometry(6, 12, 180, 32);
+            for (int i = 0; i < 80; ++i)
+                combo.addItem(QString("第 %1 章").arg(i + 1));
+            host.show();
+            for (bool editable : {false, true})
+            {
+                combo.setEditable(editable);
+                combo.setCurrentIndex(79);
+                combo.showPopup();
+                require(QTest::qWaitFor([&] { return combo.view()->isVisible(); }), "长列表未展开");
+                const auto rect = combo.view()->window()->frameGeometry();
+                require(rect.top() >= combo.mapToGlobal(QPoint(0, combo.height())).y() - 1 &&
+                            rect.bottom() <= desktop.bottom() + 1 && combo.view()->verticalScrollBar()->maximum() > 0,
+                        "屏幕底部的长列表未在下方限高滚动");
+                QTest::keyClick(combo.view(), Qt::Key_Up);
+                QTest::keyClick(combo.view(), Qt::Key_Return);
+                require(combo.currentIndex() == 78, "下拉列表未保留键盘选项操作");
+            }
+        }
         auto db = QSqlDatabase::addDatabase("QSQLITE", "moxu-personal-writing-library");
         db.setDatabaseName(dir.filePath("skills.sqlite"));
         require(db.open(), "无法建立测试库");

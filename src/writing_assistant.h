@@ -1,4 +1,5 @@
 #pragma once
+#include "downward_combo.h"
 #include "ai_sites.h"
 #include "chat_response.h"
 #include "writing_notes.h"
@@ -7,8 +8,8 @@
 
 class WritingAssistant : public QWidget
 {
-    QComboBox *service = new QComboBox;
-    QComboBox *model = new QComboBox;
+    QComboBox *service = new DownwardCombo;
+    QComboBox *model = new DownwardCombo;
     QLineEdit *key = new QLineEdit;
     QPushButton *config = new QPushButton("AI 配置"), *test = new QPushButton("测试连接");
     QLabel *referenceCount = new QLabel;

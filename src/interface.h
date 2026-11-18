@@ -48,9 +48,7 @@ class MoxuStyle : public QProxyStyle
     int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget,
                   QStyleHintReturn *result) const override
     {
-        if (hint == SH_ComboBox_Popup && widget &&
-            (widget->objectName() == "aiService" || widget->objectName() == "aiModel" ||
-             widget->objectName() == "resourceChoice" || widget->objectName() == "ledgerSort"))
+        if (hint == SH_ComboBox_Popup)
             return 0;
         return QProxyStyle::styleHint(hint, option, widget, result);
     }
@@ -94,6 +92,7 @@ inline void applyTheme(QApplication &app)
     QToolBar {spacing:3px;background:#102019;padding:7px 12px;border-bottom:1px solid #294536;}
     QToolBar QToolButton {border:none;padding:6px 9px;background:transparent;}
     QToolBar QToolButton:hover {background:#234634;}
+    QToolBar QToolButton:checked {background:#284b37;color:#c5f9ce;}
     QToolBar::separator {width:1px;background:#345140;margin:4px 5px;}
     QScrollArea#writerSheet,QScrollArea#formScroll {border:none;background:transparent;}
     QPlainTextEdit:focus,QLineEdit:focus {border-color:#80be92;}
