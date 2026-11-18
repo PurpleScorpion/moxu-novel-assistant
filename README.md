@@ -8,7 +8,20 @@
 - 项目位置：`D:\work_space\py\moxu-novel-assistant`
 - 技术方案：C++、Qt Widgets、SQLite
 - 首期平台：Windows 11 x64
-- 当前阶段：设计阶段，尚未实现可运行程序
+- 当前版本：Windows 桌面写作预览版 0.1
+
+解压完整的便携 ZIP，双击其中的 `Moxu.exe`。新建书籍后直接写第一章，切换章节时保存，停留在章节中也会自动保存。通过“资料与导出”创建人物、编辑自定义属性、添加关系、备份或导出 TXT。用“记录事件”登记资源收入或支出，可同时将描述插入正文。“时间轴”显示按章节排列的流水和余额。
+
+预览版的资源以整数记录，首次登记前按零计算。属性面板插入时读取当前人物资料和截至本章的余额，之后保留为正文。正文版本可恢复。本版暂以章节顺序作为故事顺序，历史人物属性、独立剧情节点、AI 插件和外部服务仍在设计实施范围内。以下 AI 说明描述计划功能。
+
+开发构建使用 Qt 6.8.3、MinGW 13.1、CMake 和 Ninja。在开发机将配套 Qt、MinGW 和 Ninja 的 bin 目录加入 PATH 后执行：
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/mingw_64
+cmake --build build
+ctest --test-dir build --output-on-failure
+./packaging/portable.ps1 -Executable build/Moxu.exe -Destination dist/Moxu-preview
+```
 
 完整方案见 [小说辅助系统设计书](docs/设计书.md)，包含书籍欢迎页、正文编辑器、可自定义的插入模板、数据与历史模型、备份恢复和分阶段验收标准。
 
