@@ -1,5 +1,5 @@
 #pragma once
-#include "writing_notes.h"
+#include "skill_file.h"
 #include <QtWidgets>
 
 class NoteEditor : public QWidget
@@ -13,6 +13,7 @@ class NoteEditor : public QWidget
     QLabel *status = new QLabel;
     QPushButton *removeButton = new QPushButton("删除");
     WritingNote saved;
+    QString displayedBody;
     QHash<qint64, WritingNote> records;
 
     QString label(const WritingNote &note) const
@@ -33,6 +34,7 @@ class NoteEditor : public QWidget
         saved = records.value(id);
         title->setText(saved.title);
         body->setPlainText(saved.body);
+        displayedBody = body->toPlainText();
         chapters->setCurrentIndex(qMax(0, chapters->findData(saved.chapter)));
         removeButton->setEnabled(saved.id != 0);
     }
@@ -72,7 +74,7 @@ class NoteEditor : public QWidget
     }
 
   public:
-    explicit NoteEditor(NoteScope scope) : scope(scope)
+    NoteEditor(NoteScope scope, std::function<void(NoteScope, qint64)> imported) : scope(scope)
     {
         const bool outline = scope == NoteScope::Outline;
         auto *layout = new QVBoxLayout(this);
@@ -90,6 +92,52 @@ class NoteEditor : public QWidget
         list->addWidget(entries);
         auto *add = new QPushButton(outline ? "新增大纲条目" : "新增 Skill");
         list->addWidget(add);
+        if (!outline)
+        {
+            auto *loadFile = new QPushButton("导入 SKILL.md…");
+            auto *share = new QPushButton("导出 SKILL.md…");
+            list->addWidget(loadFile);
+            list->addWidget(share);
+            share->setEnabled(false);
+            connect(title, &QLineEdit::textChanged, share,
+                    [share](const QString &name) { share->setEnabled(!name.trimmed().isEmpty()); });
+            connect(loadFile, &QPushButton::clicked, this, [this, imported] {
+                attempt([&] {
+                    QFileDialog dialog(this, "导入 SKILL.md", {}, "Markdown 文件 (*.md)");
+                    dialog.setOption(QFileDialog::DontUseNativeDialog);
+                    dialog.setFileMode(QFileDialog::ExistingFile);
+                    auto *destination = new QComboBox(&dialog);
+                    destination->setObjectName("importScope");
+                    destination->addItems({scopeName(NoteScope::Global), scopeName(NoteScope::Book)});
+                    destination->setCurrentIndex(this->scope == NoteScope::Global ? 0 : 1);
+                    auto *grid = qobject_cast<QGridLayout *>(dialog.layout());
+                    int row = grid->rowCount();
+                    grid->addWidget(new QLabel("导入到", &dialog), row, 0);
+                    grid->addWidget(destination, row, 1);
+                    if (dialog.exec() != QDialog::Accepted)
+                        return;
+                    auto note = readSkillFile(dialog.selectedFiles().first());
+                    flush();
+                    auto target = destination->currentIndex() == 0 ? NoteScope::Global : NoteScope::Book;
+                    auto record = WritingNotes(*book, target).save(note);
+                    imported(target, record.id);
+                });
+            });
+            connect(share, &QPushButton::clicked, this, [this] {
+                attempt([&] {
+                    QFileDialog dialog(this, "导出 SKILL.md", {}, "Markdown 文件 (*.md)");
+                    dialog.setAcceptMode(QFileDialog::AcceptSave);
+                    dialog.setDefaultSuffix("md");
+                    dialog.selectFile("SKILL.md");
+                    if (dialog.exec() != QDialog::Accepted)
+                        return;
+                    auto path = dialog.selectedFiles().first();
+                    flush();
+                    writeSkillFile(path, saved);
+                    status->setText("已导出到 " + QDir::toNativeSeparators(path));
+                });
+            });
+        }
         auto *form = new QVBoxLayout;
         columns->addLayout(form, 2);
         form->addWidget(new QLabel("标题"));
@@ -178,11 +226,18 @@ class NoteEditor : public QWidget
         reload(0);
         status->clear();
     }
+    void showImported(qint64 id)
+    {
+        reload(id);
+        status->setText("已导入到" + scopeName(scope) + " · " + saved.title);
+    }
     void flush()
     {
         WritingNote draft = saved;
         draft.title = title->text();
-        draft.body = body->toPlainText();
+        const auto editedBody = body->toPlainText();
+        if (editedBody != displayedBody)
+            draft.body = editedBody;
         draft.chapter = chapters->currentData().toInt();
         if (draft.title == saved.title && draft.body == saved.body && draft.chapter == saved.chapter)
             return;
@@ -198,6 +253,7 @@ class NoteEditor : public QWidget
         records.insert(draft.id, draft);
         entries->setCurrentItem(item);
         saved = draft;
+        displayedBody = editedBody;
         title->setText(saved.title);
         removeButton->setEnabled(true);
         status->setText("已保存");

@@ -308,7 +308,11 @@ class Dossier : public QWidget
         ledger->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
         {
-            auto *editor = new NoteEditor(scope);
+            auto *editor = new NoteEditor(scope, [this](NoteScope target, qint64 id) {
+                int index = target == NoteScope::Global ? 0 : 1;
+                navigation->setCurrentRow(4 + index);
+                notePages.at(index)->showImported(id);
+            });
             notePages.append(editor);
             section(scopeName(scope))->addWidget(editor);
         }

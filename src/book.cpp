@@ -18,6 +18,24 @@ QSqlQuery executeSql(const QSqlDatabase &db, const QString &sql, const QVariantL
         fail(q.lastError().text());
     return q;
 }
+void ensureSkillHeaderColumn(const QSqlDatabase &db)
+{
+    auto hasColumn = [&] {
+        return executeSql(db, "SELECT 1 FROM pragma_table_info('writing_notes') WHERE name='skill_header'").next();
+    };
+    if (hasColumn())
+        return;
+    // Another application window can upgrade the shared library at the same time.
+    try
+    {
+        executeSql(db, "ALTER TABLE writing_notes ADD COLUMN skill_header TEXT NOT NULL DEFAULT ''");
+    }
+    catch (...)
+    {
+        if (!hasColumn())
+            throw;
+    }
+}
 QSqlQuery Book::run(const QString &sql, const QVariantList &args) const
 {
     return executeSql(db, sql, args);
@@ -92,7 +110,8 @@ Book::Book(const QString &path, const QString &newTitle)
         if (!value("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writing_notes'").isValid())
             run("CREATE TABLE writing_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN "
                 "('skill','outline')), title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER REFERENCES chapters, "
-                "revision INTEGER NOT NULL DEFAULT 1)");
+                "revision INTEGER NOT NULL DEFAULT 1,skill_header TEXT NOT NULL DEFAULT '')");
+        ensureSkillHeaderColumn(db);
     }
     catch (...)
     {

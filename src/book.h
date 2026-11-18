@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 QSqlQuery executeSql(const QSqlDatabase &db, const QString &sql, const QVariantList &args = {});
+void ensureSkillHeaderColumn(const QSqlDatabase &db);
 
 class Book
 {

@@ -8,13 +8,17 @@
 - 项目位置：`D:\work_space\py\moxu-novel-assistant`
 - 技术方案：C++、Qt Widgets、SQLite
 - 首期平台：Windows 11 x64
-- 当前版本：Windows 桌面写作预览版 0.3
+- 当前版本：Windows 桌面写作预览版 0.4
 
 解压完整的便携 ZIP，双击 `Moxu.exe`。首次启动选择小说保存目录，默认使用程序旁的“书籍”文件夹。之后可在书架修改。打开书籍后，左侧可切换书籍概览、人物档案、人物关系和事件账本。右侧直接编辑书名、题材、简介和人物自定义属性。点击“进入专注写作”编写章节，顶部的“返回资料工作区”可切回。正文自动保存，在写作工具栏可以登记资源收支、插入人物属性面板、备份和导出。
 
 ### 写作 Skill 与大纲
 
 在资料侧栏打开「全局 Skill」或「本书 Skill」，为一条写作要求起名并填写内容。例如，全局规则可以约定“用动作表现情绪”，本书规则可以约定“师父对徒弟一律以姓氏相称”。全局规则保存在当前 Windows 用户的墨序数据目录 `skills.sqlite` 中。本书规则随 `.moxu` 文件保存和备份。
+
+在任一 Skill 页面点「导入 SKILL.md…」，选择文件，并在同一窗口的「导入到」下拉框选择全局或本书。导入会新增一条规则，即使同名也会保留已有条目。回到「AI 写作」即可勾选它。
+
+选中要分享的规则，点「导出 SKILL.md…」并选择保存位置。导出的文件包含当前规则的名称、描述和 Markdown 正文。墨序创建的中文标题会随文件保存，再次导入时可还原。支持 UTF-8 的 YAML 文件头和普通 Markdown。交换范围为单个文件；其他作者可另外取得其中引用的附件。[SKILL.md 格式说明](https://agentskills.io/specification)
 
 「创作大纲」用于管理剧情。每条大纲可属于全书或某一章，例如把“山门初遇，隐去师父身份”关联到第一章。大纲和 Skill 均支持直接编辑、保存和删除。
 
@@ -26,7 +30,7 @@
 
 ### 开发与构建
 
-开发构建使用 Qt 6.8.3（含 Qt Translations 中文语言包）、MinGW 13.1、CMake 和 Ninja。中文控件翻译嵌入可执行文件。在开发机将配套 Qt、MinGW 和 Ninja 的 bin 目录加入 PATH 后执行：
+开发构建使用 Qt 6.8.3（含 Qt Translations 中文语言包）、MinGW 13.1、CMake 和 Ninja。CMake 首次配置时获取并校验 yaml-cpp 0.8.0，静态链接到程序。中文控件翻译嵌入可执行文件。在开发机将配套 Qt、MinGW 和 Ninja 的 bin 目录加入 PATH 后执行：
 
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/mingw_64

@@ -28,6 +28,7 @@ struct WritingNote
     QString title, body;
     int chapter = 0;
     int revision = 0;
+    QString skillHeader;
 };
 
 class WritingNotes
@@ -51,7 +52,9 @@ class WritingNotes
         }
         executeSql(db,
                    "CREATE TABLE IF NOT EXISTS writing_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, "
-                   "title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER, revision INTEGER NOT NULL DEFAULT 1)");
+                   "title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER, revision INTEGER NOT NULL DEFAULT 1, "
+                   "skill_header TEXT NOT NULL DEFAULT '')");
+        ensureSkillHeaderColumn(db);
         return db;
     }
 
@@ -71,12 +74,12 @@ class WritingNotes
     QList<WritingNote> list() const
     {
         QList<WritingNote> result;
-        auto q = query(
-            "SELECT id,title,body,chapter,revision FROM writing_notes WHERE kind=? ORDER BY COALESCE(chapter,0),id",
-            {kind()});
+        auto q = query("SELECT id,title,body,chapter,revision,skill_header FROM writing_notes WHERE kind=? ORDER BY "
+                       "COALESCE(chapter,0),id",
+                       {kind()});
         while (q.next())
             result.append({q.value(0).toLongLong(), q.value(1).toString(), q.value(2).toString(), q.value(3).toInt(),
-                           q.value(4).toInt()});
+                           q.value(4).toInt(), q.value(5).toString()});
         return result;
     }
     WritingNote save(WritingNote note) const
@@ -89,10 +92,11 @@ class WritingNotes
         const QVariant chapter = scope == NoteScope::Outline && note.chapter ? QVariant(note.chapter) : QVariant();
         if (!note.id)
         {
-            note.id = query("INSERT INTO writing_notes(kind,title,body,chapter) VALUES(?,?,?,?)",
-                            {kind(), note.title, note.body, chapter})
-                          .lastInsertId()
-                          .toLongLong();
+            note.id =
+                query("INSERT INTO writing_notes(kind,title,body,chapter,skill_header) VALUES(?,?,?,?,COALESCE(?,''))",
+                      {kind(), note.title, note.body, chapter, note.skillHeader})
+                    .lastInsertId()
+                    .toLongLong();
         }
         else
         {
