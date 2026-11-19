@@ -112,6 +112,8 @@ Book::Book(const QString &path, const QString &newTitle)
                 "('skill','outline')), title TEXT NOT NULL, body TEXT NOT NULL, chapter INTEGER REFERENCES chapters, "
                 "revision INTEGER NOT NULL DEFAULT 1,skill_header TEXT NOT NULL DEFAULT '')");
         ensureSkillHeaderColumn(db);
+        run("CREATE TABLE IF NOT EXISTS chapter_summaries(chapter INTEGER PRIMARY KEY REFERENCES chapters(id) "
+            "ON DELETE CASCADE, body TEXT NOT NULL)");
         if (!value("SELECT 1 FROM pragma_table_info('revisions') WHERE name='rolling'").isValid())
             atomic([&] {
                 if (!value("SELECT 1 FROM pragma_table_info('revisions') WHERE name='rolling'").isValid())

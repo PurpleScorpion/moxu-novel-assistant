@@ -1196,6 +1196,8 @@ class Window : public QMainWindow
         if (!guard([this] {
                 if (pages->currentWidget() == dossier)
                     dossier->flush();
+                if (auto *assistantPage = dynamic_cast<WritingAssistant *>(pages->currentWidget()))
+                    assistantPage->flushSummary();
                 save();
             }))
             e->ignore();

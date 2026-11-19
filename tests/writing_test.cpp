@@ -518,7 +518,7 @@ data: {"type":"message_stop"}
         directory->setCurrentRow(1);
         openAssistant();
         auto priorGroup = [&] {
-            auto matches = visible<QTreeWidget>(window)->findItems("前文章节", Qt::MatchExactly);
+            auto matches = visible<QTreeWidget>(window)->findItems("前章全文", Qt::MatchExactly);
             require(matches.size() == 1, "缺少前文章节入口");
             return matches.first();
         };
@@ -563,6 +563,40 @@ data: {"type":"message_stop"}
         click(window, "发送给 AI");
         require(waitStatus("候选正文已就绪") && !wire.contains("章首") && wire.contains("她已将令牌交给渡船人。"),
                 "取消勾选后仍然发送了该章");
+        auto *summaryBox = writingTabs->findChild<QComboBox *>("summaryChapter");
+        auto *summaryText = writingTabs->findChild<QPlainTextEdit *>("chapterSummaryText");
+        auto openSummaries = [&] {
+            for (int i = 0; i < writingTabs->count(); ++i)
+                if (writingTabs->tabText(i) == "剧情摘要") writingTabs->setCurrentIndex(i);
+        };
+        openSummaries();
+        summaryBox->setCurrentIndex(summaryBox->findData(1));
+        click(window, "生成剧情摘要");
+        require(waitStatus("剧情摘要已生成") && summaryText->toPlainText() == "山门前" &&
+                    sentMessages().last().toObject()["content"] == originalChapter &&
+                    !wire.contains("她已将令牌交给渡船人。"), "生成摘要时混入写作资料或未返回可编辑摘要");
+        summaryText->selectAll();
+        summaryText->insertPlainText("她在山门取得令牌。");
+        summaryBox->setCurrentIndex(summaryBox->findData(4));
+        require(summaryText->toPlainText().isEmpty() &&
+                    check.value("SELECT body FROM chapter_summaries WHERE chapter=1") == "她在山门取得令牌。",
+                "切换章节丢失手改摘要或摘要串章");
+        writingTabs->setCurrentIndex(0);
+        auto *summaryList = visible<QTreeWidget>(window)->findItems("前章摘要", Qt::MatchExactly).first();
+        auto *firstSummary = summaryList->child(1);
+        prior->child(1)->setCheckState(0, Qt::Checked);
+        firstSummary->setCheckState(0, Qt::Checked);
+        require(prior->child(1)->checkState(0) == Qt::Unchecked, "勾选摘要后仍选中了同章全文");
+        writingTabs->setCurrentIndex(1);
+        require(!requestPreview->toPlainText().contains(originalChapter) &&
+                    requestPreview->toPlainText().contains("她在山门取得令牌。"), "预览没有切换为手改摘要");
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪") && !wire.contains("章首") && !wire.contains("未来剧情标记") &&
+                    wire.contains("她在山门取得令牌。") && wire.contains("她已将令牌交给渡船人。") &&
+                    wire.indexOf("她在山门取得令牌。") < wire.indexOf("她已将令牌交给渡船人。"),
+                "摘要和最近一章全文未按顺序发送，或泄漏了旧章正文");
+        prior->child(1)->setCheckState(0, Qt::Checked);
+        require(firstSummary->checkState(0) == Qt::Unchecked, "切回全文时未移除摘要");
         click(window, "返回正文");
         directory->setCurrentRow(0);
         server.close();

@@ -1,6 +1,7 @@
 #pragma once
 #include "downward_combo.h"
 #include "chapter_diff.h"
+#include "chapter_summary.h"
 #include "chapter_text.h"
 #include "ai_sites.h"
 #include "chat_response.h"
@@ -24,6 +25,9 @@ class WritingAssistant : public QWidget
     ChatResponse response;
     QTreeWidget *sources = new QTreeWidget;
     QTreeWidgetItem *previousChapters = nullptr;
+    QTreeWidgetItem *summaryGroup = nullptr;
+    QMap<int, QTreeWidgetItem *> fullEntries, summaryEntries;
+    ChapterSummary *summaries = nullptr;
     QString targetChapter;
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
                    *result = new QPlainTextEdit;
@@ -54,10 +58,11 @@ class WritingAssistant : public QWidget
         stop->setVisible(busy);
         useChapter->setEnabled(!busy);
         usePrevious->setEnabled(!busy);
+        summaries->setEnabled(!busy);
     }
     void updateActions()
     {
-        const bool reviewing = tabs->currentWidget() == revisionLog;
+        const bool reviewing = tabs->currentWidget() == revisionLog || tabs->currentWidget() == summaries;
         const bool comparing = tabs->currentWidget() == comparison;
         const bool candidatePage = tabs->currentWidget() == result;
         const bool ready = hasDraft && !pending;
@@ -67,7 +72,7 @@ class WritingAssistant : public QWidget
         revise->setVisible(revision && !pending);
         revise->setEnabled(!feedback->toPlainText().trimmed().isEmpty() && !result->toPlainText().trimmed().isEmpty());
         send->setVisible(!revision && !reviewing && !comparing && !pending);
-        apply->setVisible(ready && !comparing && !wholeSelection);
+        apply->setVisible(ready && !comparing && !wholeSelection && tabs->currentWidget() != summaries);
         apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
         compare->setVisible(ready && candidatePage);
         compare->setEnabled(apply->isEnabled());
@@ -123,7 +128,8 @@ class WritingAssistant : public QWidget
         QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文，勿附字数估算。若选用的写作规则冲突，优"
                         "先遵循本书规则。按作者给定的时间、地点和设定行文，核对年份和时间跨度。"
                         "收到修改意见时，在上一版正文上修改，保留此前已确认的修正和无关段落，返回完整修订稿。";
-        QStringList outlines, preceding;
+        QStringList outlines;
+        QMap<int, QString> preceding;
         for (int group = 0; group < sources->topLevelItemCount(); ++group)
         {
             auto *section = sources->topLevelItem(group);
@@ -134,8 +140,8 @@ class WritingAssistant : public QWidget
                     continue;
                 QString part =
                     "【" + section->text(0) + " · " + item->text(0) + "】\n" + item->data(0, Qt::UserRole).toString();
-                if (section == previousChapters)
-                    preceding.prepend(part); // The picker lists the nearest chapter first.
+                if (section == previousChapters || section == summaryGroup)
+                    preceding.insert(item->data(0, Qt::UserRole + 1).toInt(), part);
                 else if (group == 2)
                     outlines.append(part);
                 else
@@ -148,7 +154,7 @@ class WritingAssistant : public QWidget
             rules += "\n所引前文是已发生的剧情，大纲是创作计划。续写时核对章末的人物位置、时间、"
                      "已知信息和未完成的行动，从当前章向前推进；润色选段时仅用前文核对连续性。";
             input += "\n\n当前写作章节\n" + targetChapter +
-                     "\n\n前文章节（按原书顺序）\n" + preceding.join("\n\n");
+                     "\n\n前文章节（按原书顺序）\n" + preceding.values().join("\n\n");
         }
         if (!outlines.isEmpty())
             input += "\n\n剧情参考\n" + outlines.join("\n\n");
@@ -184,10 +190,12 @@ class WritingAssistant : public QWidget
             .toString()
             .startsWith("text/event-stream", Qt::CaseInsensitive);
     }
-    void readStream(QNetworkReply *reply, bool end)
+    void readStream(QNetworkReply *reply, bool end, bool summarizing)
     {
         const auto added = response.read(reply->readAll(), end);
-        if (!added.isEmpty())
+        if (summarizing)
+            phase = "正在生成剧情摘要";
+        else if (!added.isEmpty())
         {
             QTextCursor tail(result->document());
             tail.movePosition(QTextCursor::End);
@@ -226,8 +234,12 @@ class WritingAssistant : public QWidget
             reason.replace(key->text(), "***");
         return QString("请求失败%1，%2").arg(code ? QString("（HTTP %1）").arg(code) : QString(), reason.left(260));
     }
-    void submit(bool probe = false, bool revision = false)
+    enum class Request { Write, Probe, Revise, Summary };
+    void submit(Request kind = Request::Write, const QString &summarySource = {})
     {
+        const bool probe = kind == Request::Probe, revision = kind == Request::Revise;
+        const bool summarizing = kind == Request::Summary;
+        const bool writing = !probe && !summarizing;
         if (pending)
             return;
         if (model->currentText().isEmpty())
@@ -240,7 +252,7 @@ class WritingAssistant : public QWidget
             status->setText("请填写本站点的 API 密钥。");
             return;
         }
-        if (!probe && task->toPlainText().trimmed().isEmpty())
+        if (writing && task->toPlainText().trimmed().isEmpty())
         {
             status->setText("请填写写作任务。");
             return;
@@ -258,7 +270,11 @@ class WritingAssistant : public QWidget
             turns.append(QJsonObject{{"role", "user"}, {"content", "请只回复 OK。"}});
         else
         {
-            auto [rules, input] = messages();
+            auto [rules, input] = summarizing
+                ? qMakePair(QStringLiteral("为小说作者整理本章剧情摘要。用约 150 至 300 个中文字，记录已经发生的关键事件、"
+                                           "人物关系与资源变化、未解线索以及章末状态。忠于正文，不续写，不推测，只返回摘要。"),
+                            summarySource)
+                : messages();
             if (site().messagesApi())
                 payload["system"] = rules;
             else
@@ -277,7 +293,7 @@ class WritingAssistant : public QWidget
         site().setHeaders(request, token);
         sessionKeys[site().credentialId()] = token;
         const auto previousDraft = result->toPlainText();
-        if (!probe)
+        if (writing)
         {
             result->setReadOnly(true);
             tabs->setCurrentWidget(result);
@@ -303,11 +319,11 @@ class WritingAssistant : public QWidget
             phase = probe ? "测试请求已发送" : "已发送，等待模型输出";
             updateProgress();
         });
-        connect(reply, &QIODevice::readyRead, this, [this, reply, probe] {
+        connect(reply, &QIODevice::readyRead, this, [this, reply, probe, summarizing] {
             if (!probe && isStream(reply) && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200)
-                readStream(reply, false);
+                readStream(reply, false, summarizing);
         });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, previousDraft, conversation] {
+        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, summarizing, previousDraft, conversation] {
             progress.stop();
             deadline.stop();
             pending = nullptr;
@@ -315,7 +331,7 @@ class WritingAssistant : public QWidget
             setBusy(false);
             bool completed = false;
             auto restoreEditor = qScopeGuard([&] {
-                if (!probe && !completed)
+                if (writing && !completed)
                 {
                     result->setPlainText(previousDraft);
                     if (!conversation.isEmpty())
@@ -347,7 +363,7 @@ class WritingAssistant : public QWidget
             bool truncated = false;
             if (!probe && isStream(reply))
             {
-                readStream(reply, true);
+                readStream(reply, true, summarizing);
                 if (!response.error.isEmpty() || !response.finished)
                 {
                     status->setText(
@@ -411,6 +427,16 @@ class WritingAssistant : public QWidget
                                 (reasoningOnly ? "（本次短测试仅返回思考内容）" : ""));
                 return;
             }
+            if (summarizing)
+            {
+                if (truncated) status->setText("摘要输出中断，原摘要已保留。");
+                else
+                {
+                    summaries->generated(text);
+                    status->setText("剧情摘要已生成，可继续编辑。");
+                }
+                return;
+            }
             if (!isStream(reply))
                 result->setPlainText(text);
             completed = true;
@@ -435,6 +461,7 @@ class WritingAssistant : public QWidget
     }
 
   public:
+    void flushSummary() { summaries->flush(); }
     ~WritingAssistant() override
     {
         if (pending)
@@ -578,7 +605,12 @@ class WritingAssistant : public QWidget
             }
             group->setExpanded(true);
         }
-        previousChapters = new QTreeWidgetItem(sources, {"前文章节"});
+        previousChapters = new QTreeWidgetItem(sources, {"前章全文"});
+        summaryGroup = new QTreeWidgetItem(sources, {"前章摘要"});
+        QSet<int> availableSummaries;
+        auto stored = book.run("SELECT chapter FROM chapter_summaries WHERE chapter < ?", {currentChapter});
+        while (stored.next())
+            availableSummaries.insert(stored.value(0).toInt());
         int number = 0;
         for (auto it = chapters.cbegin(); it != chapters.cend(); ++it)
         {
@@ -592,9 +624,16 @@ class WritingAssistant : public QWidget
             item->setData(0, Qt::UserRole + 1, it.key());
             item->setCheckState(0, Qt::Unchecked);
             previousChapters->insertChild(0, item);
+            fullEntries.insert(it.key(), item);
+            auto *summaryItem = item->clone();
+            summaryGroup->insertChild(0, summaryItem);
+            summaryItem->setHidden(!availableSummaries.contains(it.key()));
+            summaryEntries.insert(it.key(), summaryItem);
         }
         previousChapters->setHidden(previousChapters->childCount() == 0);
-        previousChapters->setExpanded(true);
+        previousChapters->setExpanded(previousChapters->childCount() <= 3);
+        summaryGroup->setHidden(availableSummaries.isEmpty());
+        summaryGroup->setExpanded(true);
         chapterTitle->setText(targetChapter);
         auto *compose = new QWidget;
         auto *inputs = new QVBoxLayout(compose);
@@ -610,7 +649,7 @@ class WritingAssistant : public QWidget
         contextHeader->addWidget(new QLabel("正文上下文"), 1);
         contextHeader->addWidget(usePrevious);
         usePrevious->setVisible(previousChapters->childCount() > 0);
-        usePrevious->setToolTip("勾选上一章的全文作为参考。也可在左侧「前文章节」选择多章。");
+        usePrevious->setToolTip("勾选上一章全文。更早的章节可以在左侧勾选已保存的摘要。");
         connect(usePrevious, &QPushButton::clicked, this, [this] {
             auto *item = previousChapters->child(0);
             item->setCheckState(0, Qt::Checked);
@@ -636,6 +675,21 @@ class WritingAssistant : public QWidget
         comparison->setOpenLinks(false);
         comparison->setObjectName("chapterComparison");
         tabs->setTabVisible(tabs->addTab(comparison, "整章对比"), false);
+        summaries = new ChapterSummary(book, chapters, currentChapter, [this](int id, const QString &text) {
+            if (auto *item = summaryEntries.value(id))
+            {
+                QSignalBlocker block(sources);
+                item->setHidden(text.isEmpty());
+                if (text.isEmpty()) item->setCheckState(0, Qt::Unchecked);
+                item->setData(0, Qt::UserRole, item->checkState(0) == Qt::Checked ? text : QString());
+                bool any = false;
+                for (const auto *entry : std::as_const(summaryEntries))
+                    if (!entry->isHidden()) { any = true; break; }
+                summaryGroup->setHidden(!any);
+            }
+            updatePreview();
+        }, [this](QString body) { submit(Request::Summary, body); });
+        tabs->addTab(summaries, "剧情摘要");
         preview->setReadOnly(true);
         result->setReadOnly(true);
         context->setFont(QFont("Microsoft YaHei UI", 12));
@@ -687,11 +741,12 @@ class WritingAssistant : public QWidget
             }
         });
         connect(&progress, &QTimer::timeout, this, [this] { updateProgress(); });
-        connect(test, &QPushButton::clicked, this, [this] { submit(true); });
+        connect(test, &QPushButton::clicked, this, [this] { submit(Request::Probe); });
         for (auto *field : {task, context})
             connect(field, &QPlainTextEdit::textChanged, this, [this] { updatePreview(); });
         connect(sources, &QTreeWidget::itemChanged, this, [this, &book](QTreeWidgetItem *item) {
-            if (item->parent() == previousChapters)
+            const bool summary = item->parent() == summaryGroup;
+            if (item->parent() == previousChapters || summary)
             {
                 QSignalBlocker block(sources);
                 QString body;
@@ -699,9 +754,14 @@ class WritingAssistant : public QWidget
                 {
                     try
                     {
-                        body = book.value("SELECT body FROM chapters WHERE id=?", {item->data(0, Qt::UserRole + 1)}).toString();
+                        const auto id = item->data(0, Qt::UserRole + 1).toInt();
+                        body = book.value(summary ? "SELECT body FROM chapter_summaries WHERE chapter=?"
+                                                  : "SELECT body FROM chapters WHERE id=?", {id}).toString();
                         if (body.trimmed().isEmpty())
-                            throw std::runtime_error("这一章尚无正文。");
+                            throw std::runtime_error(summary ? "尚无摘要，可在「剧情摘要」页生成或填写。" : "这一章尚无正文。");
+                        auto *other = summary ? fullEntries.value(id) : summaryEntries.value(id);
+                        other->setCheckState(0, Qt::Unchecked);
+                        other->setData(0, Qt::UserRole, QString());
                     }
                     catch (const std::exception &e)
                     {
@@ -714,9 +774,14 @@ class WritingAssistant : public QWidget
             updatePreview();
         });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
-        connect(revise, &QPushButton::clicked, this, [this] { submit(false, true); });
+        connect(revise, &QPushButton::clicked, this, [this] { submit(Request::Revise); });
         connect(compare, &QPushButton::clicked, this, [this] { tabs->setCurrentWidget(comparison); });
         connect(tabs, &QTabWidget::currentChanged, this, [this, chapterBody] {
+            if (tabs->currentWidget() != summaries && !summaries->saveEdits())
+            {
+                tabs->setCurrentWidget(summaries);
+                return;
+            }
             if (tabs->currentWidget() == comparison)
             {
                 const auto draft = result->toPlainText();
@@ -745,6 +810,7 @@ class WritingAssistant : public QWidget
                 pending->abort();
         });
         connect(close, &QPushButton::clicked, this, [this, back] {
+            if (!summaries->saveEdits()) return;
             if (pending)
                 pending->abort();
             back();
