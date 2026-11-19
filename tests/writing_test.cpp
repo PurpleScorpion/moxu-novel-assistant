@@ -497,21 +497,28 @@ data: {"type":"message_stop"}
         auto *chapterDraft = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
         require(chapterDraft && chapterDraft->objectName() == "candidateDraft", "找不到整章候选稿");
         chapterDraft->setPlainText("新开头\n新结尾。");
-        click(window, "对比本章修改");
-        auto *diff = visible<QTextBrowser>(window);
+        auto *draftTabs = visible<QTabWidget>(window);
+        auto *diff = draftTabs->findChild<QTextBrowser *>("chapterComparison");
+        QPushButton *overwrite = nullptr;
+        for (auto *button : window.findChildren<QPushButton *>())
+            if (button->isVisible() && button->text() == "覆盖本章") overwrite = button;
+        require(overwrite && overwrite->isEnabled(), "候选正文未直接提供覆盖本章");
+        require(diff && draftTabs->isTabVisible(draftTabs->indexOf(diff)), "本地对比标签未显示");
+        draftTabs->setCurrentWidget(diff);
+        require(diff->isReadOnly() && !overwrite->isVisible(), "整章对比应仅供查看");
         require(diff->toPlainText().contains("原文 3204 字") && diff->toPlainText().contains("新稿 6 字") &&
                     diff->toPlainText().contains("－ 原文") && diff->toPlainText().contains("＋ 新稿") &&
                     diff->toPlainText().contains("章末") && diff->toPlainText().contains("新结尾。") &&
                     check.value("SELECT body FROM chapters WHERE id=1").toString() == originalChapter,
                 "整章对比内容或字数错误，或预览时提前覆盖了原文");
-        auto *draftTabs = visible<QTabWidget>(window);
         draftTabs->setCurrentWidget(chapterDraft);
         chapterDraft->appendPlainText("BLG 𠀀！");
         require(waitStatus("候选稿 10 字"), "候选稿编辑后字数未同步");
-        click(window, "对比本章修改");
+        draftTabs->setCurrentWidget(diff);
         require(diff->toPlainText().contains("新稿 10 字") && diff->toPlainText().contains("BLG 𠀀！"),
                 "再次对比显示过期草稿");
-        click(window, "覆盖本章全文");
+        draftTabs->setCurrentWidget(chapterDraft);
+        click(window, "覆盖本章");
         require(editor->toPlainText() == "新开头\n新结尾。\nBLG 𠀀！" &&
                     window.findChild<QLabel *>("chapterWordCount")->text() == "本章 10 字" &&
                     check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&

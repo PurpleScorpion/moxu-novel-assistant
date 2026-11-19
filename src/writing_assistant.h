@@ -34,8 +34,7 @@ class WritingAssistant : public QWidget
     QPlainTextEdit *feedback = new QPlainTextEdit;
     QPlainTextEdit *revisionLog = new QPlainTextEdit;
     QPushButton *revise = new QPushButton("发送修改意见");
-    QPushButton *applyChapter = new QPushButton("覆盖本章全文");
-    QPushButton *compare = new QPushButton("对比本章修改");
+    QPushButton *applyChapter = new QPushButton("覆盖本章");
     QTextBrowser *comparison = new QTextBrowser;
     QLabel *draftLength = new QLabel;
     bool wholeSelection;
@@ -73,10 +72,8 @@ class WritingAssistant : public QWidget
         send->setVisible(!revision && !reviewing && !comparing && !pending);
         apply->setVisible(ready && !comparing && !wholeSelection && tabs->currentWidget() != summaries);
         apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
-        compare->setVisible(ready && candidatePage);
-        compare->setEnabled(apply->isEnabled());
         tabs->setTabVisible(tabs->indexOf(comparison), ready);
-        applyChapter->setVisible(ready && comparing);
+        applyChapter->setVisible(ready && candidatePage);
         applyChapter->setEnabled(apply->isEnabled() && !draftTruncated);
         draftLength->setVisible(ready && (candidatePage || comparing));
         if (ready && (candidatePage || comparing))
@@ -718,8 +715,6 @@ class WritingAssistant : public QWidget
         actions->addWidget(revise);
         revise->hide();
         actions->addWidget(apply);
-        actions->addWidget(compare);
-        compare->hide();
         actions->addWidget(applyChapter);
         applyChapter->setToolTip("用当前候选稿替换本章所有正文，可在编辑器中按 Ctrl+Z 撤销。");
         applyChapter->hide();
@@ -781,7 +776,6 @@ class WritingAssistant : public QWidget
         });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
         connect(revise, &QPushButton::clicked, this, [this] { submit(Request::Revise); });
-        connect(compare, &QPushButton::clicked, this, [this] { tabs->setCurrentWidget(comparison); });
         connect(tabs, &QTabWidget::currentChanged, this, [this, chapterBody] {
             if (tabs->currentWidget() != summaries && !summaries->saveEdits())
             {
