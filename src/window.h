@@ -85,13 +85,28 @@ class Window : public QMainWindow
             else
                 editor->setFocus();
         };
-        auto accept = [this, target, back](const QString &text) mutable {
+        auto accept = [this, target, back](const QString &text, bool wholeChapter) mutable {
+            if (wholeChapter)
+            {
+                if (!guard([&] { book->atomic([&] { book->save(chapter, text, Book::SaveMode::Checkpoint); }); }))
+                    return;
+                target.select(QTextCursor::Document);
+            }
+            target.beginEditBlock();
             target.insertText(text);
+            target.endEditBlock();
             if (sheet)
                 insertion = target;
             editor->setTextCursor(target);
             back();
-            guard([this] { save(); });
+            if (wholeChapter)
+            {
+                dirty = false;
+                status->pending.stop();
+                status->confirm("本章全文");
+            }
+            else
+                guard([this] { save(); });
         };
         auto *panel = new WritingAssistant(*book, chapter, excerpt, target.hasSelection(), sessionKeys, back, accept);
         pages->addWidget(panel);

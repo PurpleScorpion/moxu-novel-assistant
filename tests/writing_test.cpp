@@ -350,7 +350,8 @@ data: {"type":"message_stop"}
         draft->setPlainText("作者手改的初稿");
         feedback->setPlainText("天气按十一月中旬处理");
         click(window, "发送修改意见");
-        require(waitStatus("第 1 轮修改已完成") && sentMessages().size() == 3 &&
+        require(feedback->toPlainText().isEmpty(), "发送后旧意见仍留在输入框");
+        require(waitStatus("第 1 轮修改已完成") && feedback->toPlainText().isEmpty() && sentMessages().size() == 3 &&
                     sentMessages()[1].toObject()["role"] == "assistant" &&
                     sentMessages()[1].toObject()["content"] == "作者手改的初稿" &&
                     sentMessages()[2].toObject()["content"] == "天气按十一月中旬处理",
@@ -429,6 +430,28 @@ data: {"type":"message_stop"}
         accept->click();
         Book check(path);
         require(check.value("SELECT body FROM chapters WHERE id=1").toString() == "甲在山门前。", "选区替换未保存");
+        require(server.listen(QHostAddress::LocalHost, port), "无法启动整章改稿测试");
+        const QString originalChapter = "章首\n" + QString(3200, QChar(u'甲')) + "\n章末";
+        editor->setPlainText(originalChapter);
+        auto middle = editor->textCursor();
+        middle.setPosition(1500);
+        editor->setTextCursor(middle);
+        openAssistant();
+        click(window, "使用本章全文");
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪") && sentMessages().last().toObject()["content"].toString().contains(originalChapter),
+                "整章改稿未发送完整上下文");
+        auto *chapterDraft = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
+        require(chapterDraft && chapterDraft->objectName() == "candidateDraft", "找不到整章候选稿");
+        chapterDraft->setPlainText("新开头\n新结尾。");
+        click(window, "覆盖本章全文");
+        require(editor->toPlainText() == "新开头\n新结尾。" &&
+                    check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&
+                    check.value("SELECT body FROM revisions WHERE chapter=1 ORDER BY id DESC LIMIT 1") == originalChapter,
+                "覆盖全文未完整替换、保存或记录旧稿");
+        editor->undo();
+        require(editor->toPlainText() == originalChapter, "整章覆盖无法一步撤销");
+        server.close();
         openAssistant();
         click(window, "发送给 AI");
         QDeadlineTimer failureTimeout(5000);
@@ -453,7 +476,7 @@ data: {"type":"message_stop"}
         click(window, "发送给 AI");
         click(window, "取消请求");
         click(window, "返回正文");
-        require(editor->isVisible() && editor->toPlainText() == "甲在山门前。", "取消后正文发生变化");
+        require(editor->isVisible() && editor->toPlainText() == originalChapter, "取消后正文发生变化");
         auto outline = WritingNotes(check, NoteScope::Outline).list().first();
         require(outline.chapter == 1, "大纲未关联章节");
         auto library = WritingNotes(check, NoteScope::Global);

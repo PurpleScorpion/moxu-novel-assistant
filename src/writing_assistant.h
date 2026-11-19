@@ -27,8 +27,10 @@ class WritingAssistant : public QWidget
     QPlainTextEdit *feedback = new QPlainTextEdit;
     QPlainTextEdit *revisionLog = new QPlainTextEdit;
     QPushButton *revise = new QPushButton("发送修改意见");
+    QPushButton *applyChapter = new QPushButton("覆盖本章全文");
+    QPushButton *useChapter = new QPushButton("使用本章全文");
     QJsonArray revisionHistory;
-    bool hasDraft = false, previewRevision = false;
+    bool hasDraft = false, previewRevision = false, draftTruncated = false;
     QPushButton *send = new QPushButton("发送给 AI"), *apply = new QPushButton, *stop = new QPushButton("取消请求");
     QLabel *status = new QLabel;
     QNetworkAccessManager network;
@@ -41,6 +43,7 @@ class WritingAssistant : public QWidget
             control->setEnabled(!busy);
         stop->setEnabled(busy);
         stop->setVisible(busy);
+        useChapter->setEnabled(!busy);
     }
     void updateActions()
     {
@@ -53,6 +56,8 @@ class WritingAssistant : public QWidget
         send->setVisible(!revision && !reviewing && !pending);
         apply->setVisible(hasDraft && !pending);
         apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
+        applyChapter->setVisible(hasDraft && !pending && tabs->currentWidget() == result);
+        applyChapter->setEnabled(apply->isEnabled() && !draftTruncated);
     }
     QJsonArray revisionTurns() const
     {
@@ -257,6 +262,8 @@ class WritingAssistant : public QWidget
         timedOut = false;
         auto *reply = network.post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
         pending = reply;
+        if (revision)
+            feedback->clear();
         elapsed.start();
         phase = probe ? "正在测试站点和模型" : "正在连接 " + service->currentText();
         updateProgress();
@@ -281,7 +288,11 @@ class WritingAssistant : public QWidget
             bool completed = false;
             auto restoreEditor = qScopeGuard([&] {
                 if (!probe && !completed)
+                {
                     result->setPlainText(previousDraft);
+                    if (!conversation.isEmpty())
+                        feedback->setPlainText(conversation.last().toObject()["content"].toString());
+                }
                 result->setReadOnly(!hasDraft);
                 updateActions();
                 updatePreview();
@@ -384,11 +395,14 @@ class WritingAssistant : public QWidget
                                                  .arg(conversation.last().toObject()["content"].toString()));
             tabs->setTabVisible(tabs->indexOf(revisionLog), !conversation.isEmpty());
             hasDraft = true;
+            draftTruncated = truncated;
             previewRevision = true;
             feedback->clear();
             tabs->setCurrentWidget(result);
             status->setText(revisionHistory.isEmpty() ? "候选正文已就绪，可提出修改意见或采纳。"
                                                       : QString("第 %1 轮修改已完成。").arg(revisionHistory.size() / 2));
+            if (truncated)
+                status->setText("模型达到输出上限，仅返回部分正文。请取得完整修订稿后再覆盖本章。");
         });
     }
 
@@ -402,7 +416,7 @@ class WritingAssistant : public QWidget
         }
     }
     WritingAssistant(Book &book, int currentChapter, QString excerpt, bool replacing, QHash<QString, QString> &keys,
-                     std::function<void()> back, std::function<void(QString)> accept)
+                     std::function<void()> back, std::function<void(QString, bool)> accept)
         : sessionKeys(keys)
     {
         auto *stack = new QStackedLayout(this);
@@ -538,9 +552,19 @@ class WritingAssistant : public QWidget
         inputs->setSpacing(8);
         inputs->addWidget(new QLabel("写作任务"));
         inputs->addWidget(task, 1);
-        task->setPlainText(replacing ? "润色所选段落，保留原意和情节。" : "承接上下文，续写下一段。");
+        const QString initialTask = replacing ? "润色所选段落，保留原意和情节。" : "承接上下文，续写下一段。";
+        task->setPlainText(initialTask);
         inputs->addSpacing(6);
-        inputs->addWidget(new QLabel("正文上下文"));
+        auto *contextHeader = new QHBoxLayout;
+        inputs->addLayout(contextHeader);
+        contextHeader->addWidget(new QLabel("正文上下文"), 1);
+        contextHeader->addWidget(useChapter);
+        const auto chapterBody = book.value("SELECT body FROM chapters WHERE id=?", {currentChapter}).toString();
+        connect(useChapter, &QPushButton::clicked, this, [this, chapterBody, initialTask] {
+            context->setPlainText(chapterBody);
+            if (task->toPlainText() == initialTask)
+                task->setPlainText("修改本章全文，保留原意和情节，返回完整正文。");
+        });
         context->setPlaceholderText("输入需要参考的正文，或从编辑器选中一段文字后进入。");
         inputs->addWidget(context, 3);
         context->setPlainText(excerpt);
@@ -557,7 +581,7 @@ class WritingAssistant : public QWidget
         for (auto *field : {task, context, preview, result})
             field->document()->setDocumentMargin(10);
         feedback->setObjectName("revisionFeedback");
-        feedback->setPlaceholderText("给这一版提修改意见，例如：把观赛时长改成十一年，保留结尾。");
+        feedback->setPlaceholderText("输入本轮修改意见…");
         feedback->setAccessibleName("修改意见");
         feedback->setFixedHeight(74);
         workLayout->addWidget(feedback);
@@ -574,6 +598,9 @@ class WritingAssistant : public QWidget
         actions->addWidget(revise);
         revise->hide();
         actions->addWidget(apply);
+        actions->addWidget(applyChapter);
+        applyChapter->setToolTip("用当前候选稿替换本章所有正文，可在编辑器中按 Ctrl+Z 撤销。");
+        applyChapter->hide();
         stop->setEnabled(false);
         stop->hide();
         apply->setEnabled(false);
@@ -629,7 +656,11 @@ class WritingAssistant : public QWidget
         });
         connect(apply, &QPushButton::clicked, this, [this, accept] {
             if (!result->toPlainText().trimmed().isEmpty())
-                accept(result->toPlainText());
+                accept(result->toPlainText(), false);
+        });
+        connect(applyChapter, &QPushButton::clicked, this, [this, accept] {
+            if (!result->toPlainText().trimmed().isEmpty())
+                accept(result->toPlainText(), true);
         });
     }
 };
