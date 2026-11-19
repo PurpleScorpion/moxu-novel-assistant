@@ -237,10 +237,15 @@ int main(int argc, char **argv)
             throw std::runtime_error("找不到 AI 写作入口");
         };
         openAssistant();
-        auto *tree = visible<QTreeWidget>(window);
-        require(tree->topLevelItem(1)->childCount() == 2, "本书 Skill 列表错误");
+        auto writingSources = [&]() {
+            for (auto *list : window.findChildren<QListWidget *>("writingSources"))
+                if (list->isVisible()) return static_cast<WritingSources *>(list);
+            throw std::runtime_error("缺少写作资料");
+        };
+        auto *tree = writingSources();
+        require(tree->sections[WritingSources::BookSkill].entries.size() == 2, "本书 Skill 列表错误");
         for (int i = 0; i < 3; ++i)
-            tree->topLevelItem(i)->child(0)->setCheckState(0, Qt::Checked);
+            tree->sections[i].entries.first()->setCheckState(Qt::Checked);
         if (argc == 2)
             window.grab().save(QString::fromLocal8Bit(argv[1]));
         QByteArray wire;
@@ -517,13 +522,9 @@ data: {"type":"message_stop"}
         auto *directory = window.findChild<QListWidget *>("chapterList");
         directory->setCurrentRow(1);
         openAssistant();
-        auto priorGroup = [&] {
-            auto matches = visible<QTreeWidget>(window)->findItems("前章全文", Qt::MatchExactly);
-            require(matches.size() == 1, "缺少前文章节入口");
-            return matches.first();
-        };
-        auto *prior = priorGroup();
-        require(prior->childCount() == 1 && prior->child(0)->checkState(0) == Qt::Unchecked,
+        auto priorGroup = [&] { return writingSources()->sections[WritingSources::Full].entries; };
+        auto prior = priorGroup();
+        require(prior.size() == 1 && prior.at(0)->checkState() == Qt::Unchecked,
                 "第二章应仅提供第一章且由作者选择");
         click(window, "引用上一章");
         click(window, "发送给 AI");
@@ -541,10 +542,47 @@ data: {"type":"message_stop"}
         directory->setCurrentRow(2);
         openAssistant();
         prior = priorGroup();
-        require(prior->childCount() == 2 && prior->child(0)->text(0) == "第 2 章 · 渡河",
+        require(prior.size() == 2 && prior.at(0)->text() == "第 2 章 · 渡河",
                 "多章选择的章节范围或编号错误");
+        auto *materials = writingSources();
+        for (int i = 0; i < 5; ++i)
+            materials->addEntry(WritingSources::Outline, QString("剧情条目 %1").arg(i));
+        const auto *global = materials->sections[WritingSources::GlobalSkill].entries.first();
+        materials->sections[WritingSources::GlobalSkill].entries.first()->setCheckState(Qt::Checked);
+        auto toggleGroup = [&](WritingSources::Group id) {
+            const auto &group = materials->sections[id];
+            materials->scrollToItem(group.heading);
+            QApplication::processEvents();
+            const bool expanded = group.expanded;
+            QTest::mouseClick(materials->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              materials->visualItemRect(group.heading).center());
+            QApplication::processEvents();
+            require(group.expanded != expanded && group.entries.first()->isHidden() == expanded,
+                    "点击分组后没有正确收起或展开资料");
+        };
+        for (int i = 0; i < 3; ++i)
+        {
+            toggleGroup(WritingSources::BookSkill);
+            toggleGroup(WritingSources::GlobalSkill);
+            toggleGroup(WritingSources::Outline);
+            require(global->checkState() == Qt::Checked && waitStatus("已选 1 项"), "收起后丢失资料勾选");
+            toggleGroup(WritingSources::Outline);
+            toggleGroup(WritingSources::GlobalSkill);
+            toggleGroup(WritingSources::BookSkill);
+        }
+        for (auto id : {WritingSources::GlobalSkill, WritingSources::BookSkill, WritingSources::Outline})
+        {
+            auto *entry = materials->sections[id].entries.first();
+            require(entry->toolTip().isEmpty(), "资料条目仍含正文悬停提示");
+            materials->scrollToItem(entry);
+            auto pos = materials->visualItemRect(entry).center();
+            QHelpEvent hover(QEvent::ToolTip, pos, materials->viewport()->mapToGlobal(pos));
+            QApplication::sendEvent(materials->viewport(), &hover);
+            require(!QToolTip::isVisible(), "鼠标悬停时出现资料提示");
+        }
+        materials->sections[WritingSources::GlobalSkill].entries.first()->setCheckState(Qt::Unchecked);
         click(window, "引用上一章");
-        prior->child(1)->setCheckState(0, Qt::Checked);
+        prior.at(1)->setCheckState(Qt::Checked);
         auto *writingTabs = visible<QTabWidget>(window);
         writingTabs->setCurrentIndex(1);
         auto *requestPreview = qobject_cast<QPlainTextEdit *>(writingTabs->currentWidget());
@@ -559,7 +597,7 @@ data: {"type":"message_stop"}
                     submitted.indexOf("她已将令牌交给渡船人。") > submitted.indexOf(originalChapter) &&
                     !submitted.contains("未来剧情标记"), "多章参考缺失、乱序或含有未来正文");
         writingTabs->setCurrentIndex(0);
-        prior->child(1)->setCheckState(0, Qt::Unchecked);
+        prior.at(1)->setCheckState(Qt::Unchecked);
         click(window, "发送给 AI");
         require(waitStatus("候选正文已就绪") && !wire.contains("章首") && wire.contains("她已将令牌交给渡船人。"),
                 "取消勾选后仍然发送了该章");
@@ -582,11 +620,10 @@ data: {"type":"message_stop"}
                     check.value("SELECT body FROM chapter_summaries WHERE chapter=1") == "她在山门取得令牌。",
                 "切换章节丢失手改摘要或摘要串章");
         writingTabs->setCurrentIndex(0);
-        auto *summaryList = visible<QTreeWidget>(window)->findItems("前章摘要", Qt::MatchExactly).first();
-        auto *firstSummary = summaryList->child(1);
-        prior->child(1)->setCheckState(0, Qt::Checked);
-        firstSummary->setCheckState(0, Qt::Checked);
-        require(prior->child(1)->checkState(0) == Qt::Unchecked, "勾选摘要后仍选中了同章全文");
+        auto *firstSummary = writingSources()->sections[WritingSources::Summary].entries.at(1);
+        prior.at(1)->setCheckState(Qt::Checked);
+        firstSummary->setCheckState(Qt::Checked);
+        require(prior.at(1)->checkState() == Qt::Unchecked, "勾选摘要后仍选中了同章全文");
         writingTabs->setCurrentIndex(1);
         require(!requestPreview->toPlainText().contains(originalChapter) &&
                     requestPreview->toPlainText().contains("她在山门取得令牌。"), "预览没有切换为手改摘要");
@@ -595,8 +632,8 @@ data: {"type":"message_stop"}
                     wire.contains("她在山门取得令牌。") && wire.contains("她已将令牌交给渡船人。") &&
                     wire.indexOf("她在山门取得令牌。") < wire.indexOf("她已将令牌交给渡船人。"),
                 "摘要和最近一章全文未按顺序发送，或泄漏了旧章正文");
-        prior->child(1)->setCheckState(0, Qt::Checked);
-        require(firstSummary->checkState(0) == Qt::Unchecked, "切回全文时未移除摘要");
+        prior.at(1)->setCheckState(Qt::Checked);
+        require(firstSummary->checkState() == Qt::Unchecked, "切回全文时未移除摘要");
         click(window, "返回正文");
         directory->setCurrentRow(0);
         server.close();

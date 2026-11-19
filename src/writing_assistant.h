@@ -6,6 +6,7 @@
 #include "ai_sites.h"
 #include "chat_response.h"
 #include "writing_notes.h"
+#include "writing_sources.h"
 #include <QScopeGuard>
 #include <QtNetwork>
 #include <QtWidgets>
@@ -23,10 +24,8 @@ class WritingAssistant : public QWidget
     QString phase;
     bool timedOut = false;
     ChatResponse response;
-    QTreeWidget *sources = new QTreeWidget;
-    QTreeWidgetItem *previousChapters = nullptr;
-    QTreeWidgetItem *summaryGroup = nullptr;
-    QMap<int, QTreeWidgetItem *> fullEntries, summaryEntries;
+    WritingSources *sources = new WritingSources;
+    QMap<int, QListWidgetItem *> fullEntries, summaryEntries;
     ChapterSummary *summaries = nullptr;
     QString targetChapter;
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
@@ -130,19 +129,18 @@ class WritingAssistant : public QWidget
                         "收到修改意见时，在上一版正文上修改，保留此前已确认的修正和无关段落，返回完整修订稿。";
         QStringList outlines;
         QMap<int, QString> preceding;
-        for (int group = 0; group < sources->topLevelItemCount(); ++group)
+        for (const auto &section : sources->sections)
         {
-            auto *section = sources->topLevelItem(group);
-            for (int i = 0; i < section->childCount(); ++i)
+            for (const auto *item : section.entries)
             {
-                auto *item = section->child(i);
-                if (item->checkState(0) != Qt::Checked)
+                if (item->checkState() != Qt::Checked)
                     continue;
+                auto group = WritingSources::groupOf(item);
                 QString part =
-                    "【" + section->text(0) + " · " + item->text(0) + "】\n" + item->data(0, Qt::UserRole).toString();
-                if (section == previousChapters || section == summaryGroup)
-                    preceding.insert(item->data(0, Qt::UserRole + 1).toInt(), part);
-                else if (group == 2)
+                    "【" + section.name + " · " + item->text() + "】\n" + item->data(WritingSources::Body).toString();
+                if (group == WritingSources::Full || group == WritingSources::Summary)
+                    preceding.insert(item->data(WritingSources::ChapterId).toInt(), part);
+                else if (group == WritingSources::Outline)
                     outlines.append(part);
                 else
                     rules += "\n\n" + part;
@@ -164,11 +162,14 @@ class WritingAssistant : public QWidget
     }
     void updatePreview()
     {
-        auto [rules, input] = messages();
         int count = 0;
-        for (QTreeWidgetItemIterator it(sources, QTreeWidgetItemIterator::Checked); *it; ++it)
-            ++count;
+        for (const auto &section : sources->sections)
+            for (const auto *item : section.entries)
+                if (item->checkState() == Qt::Checked) ++count;
         referenceCount->setText(QString("已选 %1 项").arg(count));
+        if (tabs->currentWidget() != preview)
+            return;
+        auto [rules, input] = messages();
         QString content = "目标地址  " + endpoint().toString() + "\n模型  " + model->currentText() +
                           "\n\n写作规则\n" + rules + "\n\n" + input;
         if (hasDraft && previewRevision && !pending)
@@ -483,7 +484,8 @@ class WritingAssistant : public QWidget
             QLabel#railHeading { color:#c8f0d2; font-weight:bold; font-size:16px; }
             QLabel#mutedLabel { color:#9bb6a7; }
             QFrame#railRule { background:#304638; }
-            QTreeWidget { background:transparent; border:none; padding:0; }
+            QListWidget#writingSources { background:transparent; border:none; padding:0; }
+            QListWidget#writingSources::item { padding:4px; }
             QTabWidget::pane { background:#12231b; border:1px solid #324b3c; border-radius:5px; }
             QTabBar::tab { background:transparent; color:#a2b7aa; border-bottom:2px solid transparent; padding:9px 16px; }
             QTabBar::tab:selected { color:#d5f9dd; background:#183223; border-bottom-color:#92ddaa; }
@@ -569,8 +571,6 @@ class WritingAssistant : public QWidget
         help->setObjectName("mutedLabel");
         help->setWordWrap(true);
         left->addWidget(help);
-        sources->setObjectName("writingSources");
-        sources->setHeaderHidden(true);
         left->addWidget(sources, 1);
         panes->addWidget(library);
         auto *workspace = new QWidget;
@@ -587,7 +587,9 @@ class WritingAssistant : public QWidget
             chapters[q.value(0).toInt()] = q.value(1).toString();
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
         {
-            auto *group = new QTreeWidgetItem(sources, {scopeName(scope)});
+            const auto group = scope == NoteScope::Global ? WritingSources::GlobalSkill :
+                               scope == NoteScope::Book ? WritingSources::BookSkill : WritingSources::Outline;
+            sources->addHeading(group, scopeName(scope));
             for (const auto &note : WritingNotes(book, scope).list())
             {
                 QString label = note.title;
@@ -598,42 +600,29 @@ class WritingAssistant : public QWidget
                         where += " · 当前章";
                     label = where + " / " + label;
                 }
-                auto *item = new QTreeWidgetItem(group, {label});
-                item->setCheckState(0, Qt::Unchecked);
-                item->setData(0, Qt::UserRole, note.body);
-                item->setToolTip(0, note.body);
+                sources->addEntry(group, label, note.body);
             }
-            group->setExpanded(true);
         }
-        previousChapters = new QTreeWidgetItem(sources, {"前章全文"});
-        summaryGroup = new QTreeWidgetItem(sources, {"前章摘要"});
+        sources->addHeading(WritingSources::Full, "前章全文");
+        sources->addHeading(WritingSources::Summary, "前章摘要");
         QSet<int> availableSummaries;
         auto stored = book.run("SELECT chapter FROM chapter_summaries WHERE chapter < ?", {currentChapter});
         while (stored.next())
             availableSummaries.insert(stored.value(0).toInt());
-        int number = 0;
-        for (auto it = chapters.cbegin(); it != chapters.cend(); ++it)
+        auto it = chapters.constFind(currentChapter);
+        int number = int(std::distance(chapters.cbegin(), it)) + 1;
+        targetChapter = numberedChapter(number, chapters.value(currentChapter));
+        while (it != chapters.cbegin())
         {
-            const auto label = numberedChapter(++number, it.value());
-            if (it.key() == currentChapter)
-            {
-                targetChapter = label;
-                break;
-            }
-            auto *item = new QTreeWidgetItem(QStringList{label});
-            item->setData(0, Qt::UserRole + 1, it.key());
-            item->setCheckState(0, Qt::Unchecked);
-            previousChapters->insertChild(0, item);
-            fullEntries.insert(it.key(), item);
-            auto *summaryItem = item->clone();
-            summaryGroup->insertChild(0, summaryItem);
-            summaryItem->setHidden(!availableSummaries.contains(it.key()));
-            summaryEntries.insert(it.key(), summaryItem);
+            --it;
+            const auto label = numberedChapter(--number, it.value());
+            fullEntries.insert(it.key(), sources->addEntry(WritingSources::Full, label, {}, it.key()));
+            summaryEntries.insert(it.key(), sources->addEntry(WritingSources::Summary, label, {}, it.key(),
+                                                               availableSummaries.contains(it.key())));
         }
-        previousChapters->setHidden(previousChapters->childCount() == 0);
-        previousChapters->setExpanded(previousChapters->childCount() <= 3);
-        summaryGroup->setHidden(availableSummaries.isEmpty());
-        summaryGroup->setExpanded(true);
+        sources->sections[WritingSources::Full].heading->setHidden(fullEntries.isEmpty());
+        sources->setExpanded(WritingSources::Full, fullEntries.size() <= 3);
+        sources->sections[WritingSources::Summary].heading->setHidden(availableSummaries.isEmpty());
         chapterTitle->setText(targetChapter);
         auto *compose = new QWidget;
         auto *inputs = new QVBoxLayout(compose);
@@ -648,12 +637,12 @@ class WritingAssistant : public QWidget
         inputs->addLayout(contextHeader);
         contextHeader->addWidget(new QLabel("正文上下文"), 1);
         contextHeader->addWidget(usePrevious);
-        usePrevious->setVisible(previousChapters->childCount() > 0);
+        usePrevious->setVisible(!fullEntries.isEmpty());
         usePrevious->setToolTip("勾选上一章全文。更早的章节可以在左侧勾选已保存的摘要。");
         connect(usePrevious, &QPushButton::clicked, this, [this] {
-            auto *item = previousChapters->child(0);
-            item->setCheckState(0, Qt::Checked);
-            previousChapters->setExpanded(true);
+            auto *item = fullEntries.last();
+            item->setCheckState(Qt::Checked);
+            sources->setExpanded(WritingSources::Full, true);
             sources->scrollToItem(item);
         });
         contextHeader->addWidget(useChapter);
@@ -679,13 +668,14 @@ class WritingAssistant : public QWidget
             if (auto *item = summaryEntries.value(id))
             {
                 QSignalBlocker block(sources);
-                item->setHidden(text.isEmpty());
-                if (text.isEmpty()) item->setCheckState(0, Qt::Unchecked);
-                item->setData(0, Qt::UserRole, item->checkState(0) == Qt::Checked ? text : QString());
+                item->setData(WritingSources::Available, !text.isEmpty());
+                item->setHidden(text.isEmpty() || !sources->sections[WritingSources::Summary].expanded);
+                if (text.isEmpty()) item->setCheckState(Qt::Unchecked);
+                item->setData(WritingSources::Body, item->checkState() == Qt::Checked ? text : QString());
                 bool any = false;
                 for (const auto *entry : std::as_const(summaryEntries))
-                    if (!entry->isHidden()) { any = true; break; }
-                summaryGroup->setHidden(!any);
+                    if (entry->data(WritingSources::Available).toBool()) { any = true; break; }
+                sources->sections[WritingSources::Summary].heading->setHidden(!any);
             }
             updatePreview();
         }, [this](QString body) { submit(Request::Summary, body); });
@@ -744,32 +734,34 @@ class WritingAssistant : public QWidget
         connect(test, &QPushButton::clicked, this, [this] { submit(Request::Probe); });
         for (auto *field : {task, context})
             connect(field, &QPlainTextEdit::textChanged, this, [this] { updatePreview(); });
-        connect(sources, &QTreeWidget::itemChanged, this, [this, &book](QTreeWidgetItem *item) {
-            const bool summary = item->parent() == summaryGroup;
-            if (item->parent() == previousChapters || summary)
+        connect(sources, &QListWidget::itemChanged, this, [this, &book](QListWidgetItem *item) {
+            const auto group = WritingSources::groupOf(item);
+            if (sources->sections[group].heading == item) return;
+            const bool summary = group == WritingSources::Summary;
+            if (group == WritingSources::Full || summary)
             {
                 QSignalBlocker block(sources);
                 QString body;
-                if (item->checkState(0) == Qt::Checked)
+                if (item->checkState() == Qt::Checked)
                 {
                     try
                     {
-                        const auto id = item->data(0, Qt::UserRole + 1).toInt();
+                        const auto id = item->data(WritingSources::ChapterId).toInt();
                         body = book.value(summary ? "SELECT body FROM chapter_summaries WHERE chapter=?"
                                                   : "SELECT body FROM chapters WHERE id=?", {id}).toString();
                         if (body.trimmed().isEmpty())
                             throw std::runtime_error(summary ? "尚无摘要，可在「剧情摘要」页生成或填写。" : "这一章尚无正文。");
                         auto *other = summary ? fullEntries.value(id) : summaryEntries.value(id);
-                        other->setCheckState(0, Qt::Unchecked);
-                        other->setData(0, Qt::UserRole, QString());
+                        other->setCheckState(Qt::Unchecked);
+                        other->setData(WritingSources::Body, QString());
                     }
                     catch (const std::exception &e)
                     {
-                        item->setCheckState(0, Qt::Unchecked);
-                        status->setText(item->text(0) + " · " + QString::fromUtf8(e.what()));
+                        item->setCheckState(Qt::Unchecked);
+                        status->setText(item->text() + " · " + QString::fromUtf8(e.what()));
                     }
                 }
-                item->setData(0, Qt::UserRole, body);
+                item->setData(WritingSources::Body, body);
             }
             updatePreview();
         });
