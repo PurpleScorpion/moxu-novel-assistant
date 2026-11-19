@@ -1,5 +1,7 @@
 #pragma once
 #include "downward_combo.h"
+#include "chapter_diff.h"
+#include "chapter_text.h"
 #include "ai_sites.h"
 #include "chat_response.h"
 #include "writing_notes.h"
@@ -28,6 +30,10 @@ class WritingAssistant : public QWidget
     QPlainTextEdit *revisionLog = new QPlainTextEdit;
     QPushButton *revise = new QPushButton("发送修改意见");
     QPushButton *applyChapter = new QPushButton("覆盖本章全文");
+    QPushButton *compare = new QPushButton("对比本章修改");
+    QTextBrowser *comparison = new QTextBrowser;
+    QLabel *draftLength = new QLabel;
+    bool wholeSelection;
     QPushButton *useChapter = new QPushButton("使用本章全文");
     QJsonArray revisionHistory;
     bool hasDraft = false, previewRevision = false, draftTruncated = false;
@@ -48,16 +54,25 @@ class WritingAssistant : public QWidget
     void updateActions()
     {
         const bool reviewing = tabs->currentWidget() == revisionLog;
-        const bool revision = hasDraft && previewRevision && !reviewing;
+        const bool comparing = tabs->currentWidget() == comparison;
+        const bool candidatePage = tabs->currentWidget() == result;
+        const bool ready = hasDraft && !pending;
+        const bool revision = hasDraft && previewRevision && !reviewing && !comparing;
         feedback->setVisible(revision);
         feedback->setEnabled(!pending);
         revise->setVisible(revision && !pending);
         revise->setEnabled(!feedback->toPlainText().trimmed().isEmpty() && !result->toPlainText().trimmed().isEmpty());
-        send->setVisible(!revision && !reviewing && !pending);
-        apply->setVisible(hasDraft && !pending);
+        send->setVisible(!revision && !reviewing && !comparing && !pending);
+        apply->setVisible(ready && !comparing && !wholeSelection);
         apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
-        applyChapter->setVisible(hasDraft && !pending && tabs->currentWidget() == result);
+        compare->setVisible(ready && candidatePage);
+        compare->setEnabled(apply->isEnabled());
+        tabs->setTabVisible(tabs->indexOf(comparison), ready);
+        applyChapter->setVisible(ready && comparing);
         applyChapter->setEnabled(apply->isEnabled() && !draftTruncated);
+        draftLength->setVisible(ready && (candidatePage || comparing));
+        if (ready && (candidatePage || comparing))
+            draftLength->setText(QString("候选稿 %1 字").arg(chapterWordCount(result->toPlainText())));
     }
     QJsonArray revisionTurns() const
     {
@@ -101,7 +116,7 @@ class WritingAssistant : public QWidget
     }
     QPair<QString, QString> messages() const
     {
-        QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文。若选用的写作规则冲突，优"
+        QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文，勿附字数估算。若选用的写作规则冲突，优"
                         "先遵循本书规则。按作者给定的时间、地点和设定行文，核对年份和时间跨度。"
                         "收到修改意见时，在上一版正文上修改，保留此前已确认的修正和无关段落，返回完整修订稿。";
         QStringList outlines;
@@ -415,9 +430,9 @@ class WritingAssistant : public QWidget
             pending->abort();
         }
     }
-    WritingAssistant(Book &book, int currentChapter, QString excerpt, bool replacing, QHash<QString, QString> &keys,
+    WritingAssistant(Book &book, int currentChapter, QString excerpt, bool replacing, bool entireSelection, QHash<QString, QString> &keys,
                      std::function<void()> back, std::function<void(QString, bool)> accept)
-        : sessionKeys(keys)
+        : wholeSelection(entireSelection), sessionKeys(keys)
     {
         auto *stack = new QStackedLayout(this);
         auto *home = new QWidget;
@@ -451,6 +466,10 @@ class WritingAssistant : public QWidget
         chapterTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         top->addSpacing(10);
         top->addWidget(chapterTitle, 1);
+        draftLength->setObjectName("candidateWordCount");
+        draftLength->setToolTip("与章节字数相同，每个汉字、字母和数字各计一字。");
+        top->addWidget(draftLength);
+        draftLength->hide();
         top->addWidget(config);
         auto *close = new QPushButton("返回正文");
         top->addWidget(close);
@@ -574,6 +593,9 @@ class WritingAssistant : public QWidget
         result->setObjectName("candidateDraft");
         revisionLog->setReadOnly(true);
         tabs->setTabVisible(tabs->addTab(revisionLog, "修改记录"), false);
+        comparison->setOpenLinks(false);
+        comparison->setObjectName("chapterComparison");
+        tabs->setTabVisible(tabs->addTab(comparison, "整章对比"), false);
         preview->setReadOnly(true);
         result->setReadOnly(true);
         context->setFont(QFont("Microsoft YaHei UI", 12));
@@ -598,6 +620,8 @@ class WritingAssistant : public QWidget
         actions->addWidget(revise);
         revise->hide();
         actions->addWidget(apply);
+        actions->addWidget(compare);
+        compare->hide();
         actions->addWidget(applyChapter);
         applyChapter->setToolTip("用当前候选稿替换本章所有正文，可在编辑器中按 Ctrl+Z 撤销。");
         applyChapter->hide();
@@ -629,8 +653,17 @@ class WritingAssistant : public QWidget
         connect(sources, &QTreeWidget::itemChanged, this, [this] { updatePreview(); });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
         connect(revise, &QPushButton::clicked, this, [this] { submit(false, true); });
-        connect(tabs, &QTabWidget::currentChanged, this, [this] {
-            if (tabs->currentWidget() != preview && tabs->currentWidget() != revisionLog)
+        connect(compare, &QPushButton::clicked, this, [this] { tabs->setCurrentWidget(comparison); });
+        connect(tabs, &QTabWidget::currentChanged, this, [this, chapterBody] {
+            if (tabs->currentWidget() == comparison)
+            {
+                const auto draft = result->toPlainText();
+                comparison->setHtml(QString("<p><b>原文 %1 字　→　新稿 %2 字</b></p>")
+                                        .arg(chapterWordCount(chapterBody)).arg(chapterWordCount(draft)) +
+                                    ChapterDiff::render(chapterBody, draft));
+                comparison->verticalScrollBar()->setValue(0);
+            }
+            else if (tabs->currentWidget() != preview && tabs->currentWidget() != revisionLog)
                 previewRevision = tabs->currentWidget() == result;
             updateActions();
             if (tabs->currentWidget() == preview)

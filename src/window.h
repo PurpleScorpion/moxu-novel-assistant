@@ -1,4 +1,5 @@
 #pragma once
+#include "chapter_text.h"
 #include "book_cover.h"
 #include "dossier.h"
 #include "event_form.h"
@@ -108,7 +109,10 @@ class Window : public QMainWindow
             else
                 guard([this] { save(); });
         };
-        auto *panel = new WritingAssistant(*book, chapter, excerpt, target.hasSelection(), sessionKeys, back, accept);
+        const bool entireSelection = target.hasSelection() && target.selectionStart() == 0 &&
+                                     target.selectionEnd() == editor->document()->characterCount() - 1;
+        auto *panel = new WritingAssistant(*book, chapter, excerpt, target.hasSelection(), entireSelection,
+                                           sessionKeys, back, accept);
         pages->addWidget(panel);
         pages->setCurrentWidget(panel);
         tools->hide();
@@ -1067,11 +1071,7 @@ class Window : public QMainWindow
         chapterMeta->addWidget(chapterLength);
         chapterMeta->addStretch();
         connect(editor->document(), &QTextDocument::contentsChanged, this, [this] {
-            qsizetype count = 0;
-            for (const auto ch : editor->toPlainText().toUcs4())
-                if (QChar::isLetterOrNumber(ch))
-                    ++count;
-            chapterLength->setText(QString("本章 %1 字").arg(count));
+            chapterLength->setText(QString("本章 %1 字").arg(chapterWordCount(editor->toPlainText())));
         });
         titleBlock->addWidget(heading);
         button(chapterHeader, "改章名", [this] { renameChapter(); });

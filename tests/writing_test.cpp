@@ -40,6 +40,13 @@ int main(int argc, char **argv)
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.path());
     try
     {
+        const auto changes = ChapterDiff::render("不变\n从 S5 起七年。\n收尾", "不变\n从 S5 起十一年。\n收尾");
+        require(changes.contains(">七</span>") && changes.contains(">十一</span>") && !changes.contains("收尾"),
+                "没有准确标记段内改字或重复展示未改段落");
+        require(ChapterDiff::render("", "<山门>").contains("&lt;山门&gt;") &&
+                    ChapterDiff::render("正文\n", "正文").contains("（空行）") &&
+                    ChapterDiff::render("相同", "相同").contains("完全一致"),
+                "特殊字符、空行或相同文本的对比显示错误");
         {
             QWidget host(nullptr, Qt::FramelessWindowHint);
             DownwardCombo combo;
@@ -444,8 +451,23 @@ data: {"type":"message_stop"}
         auto *chapterDraft = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
         require(chapterDraft && chapterDraft->objectName() == "candidateDraft", "找不到整章候选稿");
         chapterDraft->setPlainText("新开头\n新结尾。");
+        click(window, "对比本章修改");
+        auto *diff = visible<QTextBrowser>(window);
+        require(diff->toPlainText().contains("原文 3204 字") && diff->toPlainText().contains("新稿 6 字") &&
+                    diff->toPlainText().contains("－ 原文") && diff->toPlainText().contains("＋ 新稿") &&
+                    diff->toPlainText().contains("章末") && diff->toPlainText().contains("新结尾。") &&
+                    check.value("SELECT body FROM chapters WHERE id=1").toString() == originalChapter,
+                "整章对比内容或字数错误，或预览时提前覆盖了原文");
+        auto *draftTabs = visible<QTabWidget>(window);
+        draftTabs->setCurrentWidget(chapterDraft);
+        chapterDraft->appendPlainText("BLG 𠀀！");
+        require(waitStatus("候选稿 10 字"), "候选稿编辑后字数未同步");
+        click(window, "对比本章修改");
+        require(diff->toPlainText().contains("新稿 10 字") && diff->toPlainText().contains("BLG 𠀀！"),
+                "再次对比显示过期草稿");
         click(window, "覆盖本章全文");
-        require(editor->toPlainText() == "新开头\n新结尾。" &&
+        require(editor->toPlainText() == "新开头\n新结尾。\nBLG 𠀀！" &&
+                    window.findChild<QLabel *>("chapterWordCount")->text() == "本章 10 字" &&
                     check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&
                     check.value("SELECT body FROM revisions WHERE chapter=1 ORDER BY id DESC LIMIT 1") == originalChapter,
                 "覆盖全文未完整替换、保存或记录旧稿");
