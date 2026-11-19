@@ -70,9 +70,10 @@ class Window : public QMainWindow
     {
         save();
         QPointer<QWidget> previousFocus = QApplication::focusWidget();
-        auto target = editor->textCursor();
-        QString excerpt =
-            target.hasSelection() ? target.selectedText() : editor->toPlainText().left(target.position()).right(3000);
+        const auto selection = editor->textCursor();
+        const int start = selection.selectionStart(), end = selection.selectionEnd();
+        const auto original = editor->toPlainText();
+        QString excerpt = selection.selectedText();
         excerpt.replace(QChar::ParagraphSeparator, '\n');
         auto back = [this, previousFocus] {
             auto *panel = pages->currentWidget();
@@ -86,32 +87,34 @@ class Window : public QMainWindow
             else
                 editor->setFocus();
         };
-        auto accept = [this, target, back](const QString &text, bool wholeChapter) mutable {
-            if (wholeChapter)
+        auto accept = [this, start, end, original, sourceChapter = chapter, back](const QString &text, bool wholeChapter) {
+            if (chapter != sourceChapter || editor->toPlainText() != original)
             {
-                if (!guard([&] { book->atomic([&] { book->save(chapter, text, Book::SaveMode::Checkpoint); }); }))
-                    return;
-                target.select(QTextCursor::Document);
+                statusBar()->show();
+                statusBar()->showMessage("原章节内容已变化，请复制候选稿，返回正文重新选择要修改的位置。");
+                return;
             }
+            const auto newBody = wholeChapter ? text : original.left(start) + text + original.mid(end);
+            if (!guard([&] { book->atomic([&] { book->save(chapter, newBody, Book::SaveMode::Checkpoint); }); }))
+                return;
+            QTextCursor target(editor->document());
+            target.setPosition(wholeChapter ? 0 : start);
+            target.setPosition(wholeChapter ? editor->document()->characterCount() - 1 : end, QTextCursor::KeepAnchor);
             target.beginEditBlock();
+            target.removeSelectedText();
             target.insertText(text);
             target.endEditBlock();
             if (sheet)
                 insertion = target;
             editor->setTextCursor(target);
             back();
-            if (wholeChapter)
-            {
-                dirty = false;
-                status->pending.stop();
-                status->confirm("本章全文");
-            }
-            else
-                guard([this] { save(); });
+            dirty = false;
+            status->pending.stop();
+            statusBar()->clearMessage();
+            status->confirm(wholeChapter ? "本章全文" : start == end ? "插入正文" : "选区替换");
         };
-        const bool entireSelection = target.hasSelection() && target.selectionStart() == 0 &&
-                                     target.selectionEnd() == editor->document()->characterCount() - 1;
-        auto *panel = new WritingAssistant(*book, chapter, excerpt, target.hasSelection(), entireSelection,
+        const bool entireSelection = start != end && start == 0 && end == editor->document()->characterCount() - 1;
+        auto *panel = new WritingAssistant(*book, chapter, excerpt, selection.hasSelection(), entireSelection,
                                            sessionKeys, back, accept);
         pages->addWidget(panel);
         pages->setCurrentWidget(panel);

@@ -438,10 +438,50 @@ data: {"type":"message_stop"}
         Book check(path);
         require(check.value("SELECT body FROM chapters WHERE id=1").toString() == "甲在山门前。", "选区替换未保存");
         require(server.listen(QHostAddress::LocalHost, port), "无法启动整章改稿测试");
+        const QString passage = "旧第一段𠀀。\n\n旧第二段。";
+        const QString prefix = passage + "\n分界。\n", suffix = "\n尾声。";
+        const QString source = prefix + passage + suffix;
+        editor->setPlainText(source);
+        auto reverse = editor->textCursor();
+        reverse.setPosition(prefix.size() + passage.size());
+        reverse.setPosition(prefix.size(), QTextCursor::KeepAnchor);
+        editor->setTextCursor(reverse);
+        openAssistant();
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪"), "选段润色未生成候选稿");
+        auto selectedRequest = sentMessages().last().toObject()["content"].toString();
+        require(selectedRequest.endsWith("正文上下文\n" + passage) && !selectedRequest.contains("分界") &&
+                    !selectedRequest.contains("尾声"), "选段润色带入了高亮以外的原文");
+        auto *revised = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
+        require(revised && revised->objectName() == "candidateDraft", "缺少选段候选稿");
+        const QString polished = "润色一。\n润色二。";
+        revised->setPlainText(polished);
+        editor->setPlainText(source + "后续改动");
+        click(window, "采纳并替换选区");
+        require(revised->isVisible() && editor->toPlainText() == source + "后续改动",
+                "原文已变化时仍然写入了旧选区");
+        // Reloading the same text invalidates live QTextCursor anchors, even though the manuscript is identical.
+        editor->setPlainText(source);
+        click(window, "采纳并替换选区");
+        require(editor->toPlainText() == prefix + polished + suffix &&
+                    check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText(),
+                "多段润色没有准确替换最初选中的第二处原文");
+        editor->undo();
+        require(editor->toPlainText() == source, "撤销选区替换没有恢复原文");
         const QString originalChapter = "章首\n" + QString(3200, QChar(u'甲')) + "\n章末";
         editor->setPlainText(originalChapter);
         auto middle = editor->textCursor();
         middle.setPosition(1500);
+        editor->setTextCursor(middle);
+        openAssistant();
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪") && !sentMessages().last().toObject()["content"].toString().contains("正文上下文") &&
+                    !wire.contains("章首") && !wire.contains("甲甲") && !wire.contains("章末"),
+                "仅有光标时仍然发送了章节正文");
+        click(window, "采纳并插入光标处");
+        require(editor->toPlainText() == originalChapter.left(1500) + "山门前" + originalChapter.mid(1500),
+                "无选区创作没有插入原光标处");
+        editor->undo();
         editor->setTextCursor(middle);
         openAssistant();
         click(window, "使用本章全文");

@@ -571,7 +571,7 @@ class WritingAssistant : public QWidget
         inputs->setSpacing(8);
         inputs->addWidget(new QLabel("写作任务"));
         inputs->addWidget(task, 1);
-        const QString initialTask = replacing ? "润色所选段落，保留原意和情节。" : "承接上下文，续写下一段。";
+        const QString initialTask = replacing ? "润色所选段落，保留原意和情节。" : "按写作要求创作一段小说正文。";
         task->setPlainText(initialTask);
         inputs->addSpacing(6);
         auto *contextHeader = new QHBoxLayout;
@@ -584,7 +584,7 @@ class WritingAssistant : public QWidget
             if (task->toPlainText() == initialTask)
                 task->setPlainText("修改本章全文，保留原意和情节，返回完整正文。");
         });
-        context->setPlaceholderText("输入需要参考的正文，或从编辑器选中一段文字后进入。");
+        context->setPlaceholderText("可选。未选中正文时此处留空，也可以手动填写或使用本章全文。");
         inputs->addWidget(context, 3);
         context->setPlainText(excerpt);
         tabs->addTab(compose, "写作要求");
