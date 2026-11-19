@@ -23,6 +23,8 @@ class WritingAssistant : public QWidget
     bool timedOut = false;
     ChatResponse response;
     QTreeWidget *sources = new QTreeWidget;
+    QTreeWidgetItem *previousChapters = nullptr;
+    QString targetChapter;
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
                    *result = new QPlainTextEdit;
     QTabWidget *tabs = new QTabWidget;
@@ -35,6 +37,7 @@ class WritingAssistant : public QWidget
     QLabel *draftLength = new QLabel;
     bool wholeSelection;
     QPushButton *useChapter = new QPushButton("使用本章全文");
+    QPushButton *usePrevious = new QPushButton("引用上一章");
     QJsonArray revisionHistory;
     bool hasDraft = false, previewRevision = false, draftTruncated = false;
     QPushButton *send = new QPushButton("发送给 AI"), *apply = new QPushButton, *stop = new QPushButton("取消请求");
@@ -50,6 +53,7 @@ class WritingAssistant : public QWidget
         stop->setEnabled(busy);
         stop->setVisible(busy);
         useChapter->setEnabled(!busy);
+        usePrevious->setEnabled(!busy);
     }
     void updateActions()
     {
@@ -119,7 +123,7 @@ class WritingAssistant : public QWidget
         QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文，勿附字数估算。若选用的写作规则冲突，优"
                         "先遵循本书规则。按作者给定的时间、地点和设定行文，核对年份和时间跨度。"
                         "收到修改意见时，在上一版正文上修改，保留此前已确认的修正和无关段落，返回完整修订稿。";
-        QStringList outlines;
+        QStringList outlines, preceding;
         for (int group = 0; group < sources->topLevelItemCount(); ++group)
         {
             auto *section = sources->topLevelItem(group);
@@ -130,13 +134,22 @@ class WritingAssistant : public QWidget
                     continue;
                 QString part =
                     "【" + section->text(0) + " · " + item->text(0) + "】\n" + item->data(0, Qt::UserRole).toString();
-                if (group == 2)
+                if (section == previousChapters)
+                    preceding.prepend(part); // The picker lists the nearest chapter first.
+                else if (group == 2)
                     outlines.append(part);
                 else
                     rules += "\n\n" + part;
             }
         }
         QString input = "写作任务\n" + task->toPlainText();
+        if (!preceding.isEmpty())
+        {
+            rules += "\n所引前文是已发生的剧情，大纲是创作计划。续写时核对章末的人物位置、时间、"
+                     "已知信息和未完成的行动，从当前章向前推进；润色选段时仅用前文核对连续性。";
+            input += "\n\n当前写作章节\n" + targetChapter +
+                     "\n\n前文章节（按原书顺序）\n" + preceding.join("\n\n");
+        }
         if (!outlines.isEmpty())
             input += "\n\n剧情参考\n" + outlines.join("\n\n");
         if (!context->toPlainText().isEmpty())
@@ -542,7 +555,7 @@ class WritingAssistant : public QWidget
         panes->setSizes({258, 790});
         panes->setStretchFactor(1, 1);
         QMap<int, QString> chapters;
-        auto q = book.run("SELECT id,title FROM chapters");
+        auto q = book.run("SELECT id,title FROM chapters ORDER BY id");
         while (q.next())
             chapters[q.value(0).toInt()] = q.value(1).toString();
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
@@ -565,6 +578,24 @@ class WritingAssistant : public QWidget
             }
             group->setExpanded(true);
         }
+        previousChapters = new QTreeWidgetItem(sources, {"前文章节"});
+        int number = 0;
+        for (auto it = chapters.cbegin(); it != chapters.cend(); ++it)
+        {
+            const auto label = numberedChapter(++number, it.value());
+            if (it.key() == currentChapter)
+            {
+                targetChapter = label;
+                break;
+            }
+            auto *item = new QTreeWidgetItem(QStringList{label});
+            item->setData(0, Qt::UserRole + 1, it.key());
+            item->setCheckState(0, Qt::Unchecked);
+            previousChapters->insertChild(0, item);
+        }
+        previousChapters->setHidden(previousChapters->childCount() == 0);
+        previousChapters->setExpanded(true);
+        chapterTitle->setText(targetChapter);
         auto *compose = new QWidget;
         auto *inputs = new QVBoxLayout(compose);
         inputs->setContentsMargins(18, 16, 18, 16);
@@ -577,6 +608,15 @@ class WritingAssistant : public QWidget
         auto *contextHeader = new QHBoxLayout;
         inputs->addLayout(contextHeader);
         contextHeader->addWidget(new QLabel("正文上下文"), 1);
+        contextHeader->addWidget(usePrevious);
+        usePrevious->setVisible(previousChapters->childCount() > 0);
+        usePrevious->setToolTip("勾选上一章的全文作为参考。也可在左侧「前文章节」选择多章。");
+        connect(usePrevious, &QPushButton::clicked, this, [this] {
+            auto *item = previousChapters->child(0);
+            item->setCheckState(0, Qt::Checked);
+            previousChapters->setExpanded(true);
+            sources->scrollToItem(item);
+        });
         contextHeader->addWidget(useChapter);
         const auto chapterBody = book.value("SELECT body FROM chapters WHERE id=?", {currentChapter}).toString();
         connect(useChapter, &QPushButton::clicked, this, [this, chapterBody, initialTask] {
@@ -650,7 +690,29 @@ class WritingAssistant : public QWidget
         connect(test, &QPushButton::clicked, this, [this] { submit(true); });
         for (auto *field : {task, context})
             connect(field, &QPlainTextEdit::textChanged, this, [this] { updatePreview(); });
-        connect(sources, &QTreeWidget::itemChanged, this, [this] { updatePreview(); });
+        connect(sources, &QTreeWidget::itemChanged, this, [this, &book](QTreeWidgetItem *item) {
+            if (item->parent() == previousChapters)
+            {
+                QSignalBlocker block(sources);
+                QString body;
+                if (item->checkState(0) == Qt::Checked)
+                {
+                    try
+                    {
+                        body = book.value("SELECT body FROM chapters WHERE id=?", {item->data(0, Qt::UserRole + 1)}).toString();
+                        if (body.trimmed().isEmpty())
+                            throw std::runtime_error("这一章尚无正文。");
+                    }
+                    catch (const std::exception &e)
+                    {
+                        item->setCheckState(0, Qt::Unchecked);
+                        status->setText(item->text(0) + " · " + QString::fromUtf8(e.what()));
+                    }
+                }
+                item->setData(0, Qt::UserRole, body);
+            }
+            updatePreview();
+        });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
         connect(revise, &QPushButton::clicked, this, [this] { submit(false, true); });
         connect(compare, &QPushButton::clicked, this, [this] { tabs->setCurrentWidget(comparison); });

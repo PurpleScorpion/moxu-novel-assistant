@@ -80,6 +80,7 @@ int main(int argc, char **argv)
             Book old(path, "甲");
             old.run("DROP TABLE writing_notes"); // Simulate a 0.2 book.
             old.save(1, "甲在山下。");
+            old.run("INSERT INTO chapters(id,title,body) VALUES(4,'渡河',''),(9,'入城',''),(12,'尾声','未来剧情标记')");
         }
         QSettings().setValue("recent", QStringList{path});
         QSettings().setValue("booksDir", dir.path());
@@ -513,6 +514,57 @@ data: {"type":"message_stop"}
                 "覆盖全文未完整替换、保存或记录旧稿");
         editor->undo();
         require(editor->toPlainText() == originalChapter, "整章覆盖无法一步撤销");
+        auto *directory = window.findChild<QListWidget *>("chapterList");
+        directory->setCurrentRow(1);
+        openAssistant();
+        auto priorGroup = [&] {
+            auto matches = visible<QTreeWidget>(window)->findItems("前文章节", Qt::MatchExactly);
+            require(matches.size() == 1, "缺少前文章节入口");
+            return matches.first();
+        };
+        auto *prior = priorGroup();
+        require(prior->childCount() == 1 && prior->child(0)->checkState(0) == Qt::Unchecked,
+                "第二章应仅提供第一章且由作者选择");
+        click(window, "引用上一章");
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪"), "引用上一章后生成失败");
+        auto submitted = sentMessages().last().toObject()["content"].toString();
+        require(submitted.contains(originalChapter) && submitted.contains("第 2 章 · 渡河") &&
+                    !submitted.contains("未来剧情标记"), "第二章未正确引用第一章全文");
+        auto *secondDraft = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
+        require(secondDraft, "缺少续写候选正文");
+        secondDraft->setPlainText("她已将令牌交给渡船人。");
+        click(window, "采纳并插入光标处");
+        require(check.value("SELECT body FROM chapters WHERE id=1") == originalChapter &&
+                    check.value("SELECT body FROM chapters WHERE id=4") == "她已将令牌交给渡船人。",
+                "采纳续写时写入了错误章节");
+        directory->setCurrentRow(2);
+        openAssistant();
+        prior = priorGroup();
+        require(prior->childCount() == 2 && prior->child(0)->text(0) == "第 2 章 · 渡河",
+                "多章选择的章节范围或编号错误");
+        click(window, "引用上一章");
+        prior->child(1)->setCheckState(0, Qt::Checked);
+        auto *writingTabs = visible<QTabWidget>(window);
+        writingTabs->setCurrentIndex(1);
+        auto *requestPreview = qobject_cast<QPlainTextEdit *>(writingTabs->currentWidget());
+        require(requestPreview && requestPreview->toPlainText().contains(originalChapter) &&
+                    requestPreview->toPlainText().contains("她已将令牌交给渡船人。"), "预览中缺少选定章节");
+        click(window, "测试连接");
+        require(waitStatus("连接成功") && !wire.contains("令牌") && !wire.contains("章首"), "测试连接外发了前文章节");
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪"), "引用多章后生成失败");
+        submitted = sentMessages().last().toObject()["content"].toString();
+        require(submitted.contains("第 3 章 · 入城") && submitted.contains(originalChapter) &&
+                    submitted.indexOf("她已将令牌交给渡船人。") > submitted.indexOf(originalChapter) &&
+                    !submitted.contains("未来剧情标记"), "多章参考缺失、乱序或含有未来正文");
+        writingTabs->setCurrentIndex(0);
+        prior->child(1)->setCheckState(0, Qt::Unchecked);
+        click(window, "发送给 AI");
+        require(waitStatus("候选正文已就绪") && !wire.contains("章首") && wire.contains("她已将令牌交给渡船人。"),
+                "取消勾选后仍然发送了该章");
+        click(window, "返回正文");
+        directory->setCurrentRow(0);
         server.close();
         openAssistant();
         click(window, "发送给 AI");
