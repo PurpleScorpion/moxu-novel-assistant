@@ -27,7 +27,7 @@ class WritingSources : public QListWidget
 {
   public:
     enum Group { GlobalSkill, BookSkill, Outline, Full, Summary, GroupCount };
-    enum Role { Body = Qt::UserRole, ChapterId, GroupId, Available };
+    enum Role { Body = Qt::UserRole, ChapterId, GroupId, Available, ChapterOrder };
     struct Section
     {
         QString name;

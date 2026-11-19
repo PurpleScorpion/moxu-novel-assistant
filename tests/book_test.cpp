@@ -242,6 +242,41 @@ int main(int argc, char **argv)
             reopened.resourceBalances(1, 1).value("太极图") != "8" || reopened.supplyCounts(1, 2).value("血瓶") != 3 ||
             reopened.ledgerPage({"", "太极图", "", true, "item"}, 1).total != 2)
             return 33;
+        const auto oldFile = dir.filePath("old-order.moxu");
+        {
+            Book legacy(oldFile, "旧书");
+            legacy.run("INSERT INTO chapters(id,title) VALUES(9,'番外')");
+            legacy.run("INSERT INTO chapter_summaries(chapter,body) VALUES(9,'手改的旧摘要')");
+            legacy.run("INSERT INTO writing_notes(kind,title,body,chapter) VALUES('outline','章节大纲','',9),"
+                       "('outline','全书大纲','',NULL)");
+            for (auto sql : {"DROP TRIGGER chapter_appended", "DROP TRIGGER chapter_edited", "DROP TRIGGER summary_heading",
+                             "DROP INDEX chapter_position", "DROP VIEW ordered_events", "DROP VIEW ordered_stock",
+                             "ALTER TABLE chapters DROP COLUMN position", "ALTER TABLE chapters DROP COLUMN body_version",
+                             "ALTER TABLE chapters DROP COLUMN word_count", "ALTER TABLE chapter_summaries DROP COLUMN source_version",
+                             "DROP TRIGGER outline_appended", "ALTER TABLE writing_notes DROP COLUMN position"})
+                legacy.run(sql);
+        }
+        Book upgraded(oldFile);
+        if (upgraded.value("SELECT id FROM chapters WHERE position=2") != 9 ||
+            upgraded.value("SELECT body FROM chapter_summaries WHERE chapter=9") != "手改的旧摘要" ||
+            !upgraded.value("SELECT source_version FROM chapter_summaries WHERE chapter=9").isNull() ||
+            upgraded.value("SELECT title FROM writing_notes WHERE position=1") != "全书大纲")
+            return 36;
+        const int extra = other.insertChapter("番外", 2);
+        other.event(extra, 1, "灵石", 20, "番外收获");
+        other.event(2, 1, "灵石", -5, "回城兑换");
+        if (other.balance(1, "灵石", 2) != 15 || other.balance(1, "灵石", extra) != 20 ||
+            !rejected([&] { other.moveChapter(extra, 1); }) ||
+            other.value("SELECT position FROM chapters WHERE id=?", {extra}).toInt() != 2)
+            return 34;
+        other.run("INSERT INTO chapter_summaries(chapter,body,source_version) VALUES(?,?,0)",
+                  {extra, "【第 2 章 · 番外】\n奖励灵石。"});
+        other.moveChapter(extra, -1);
+        if (reopened.value("SELECT body FROM chapter_summaries WHERE chapter=?", {extra}) != "【第 1 章 · 番外】\n奖励灵石。" ||
+            reopened.ledgerPage({"", "灵石", "", false}, 1).rows.first().first() != "第 1 章 · 番外" ||
+            !reopened.ownedItems(1, extra).isEmpty() || !reopened.characterSkills(1, extra).isEmpty() ||
+            reopened.supplyCounts(1, extra).value("血瓶") != 0)
+            return 35;
     }
     catch (const std::exception &e)
     {

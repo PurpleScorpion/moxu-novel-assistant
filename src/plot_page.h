@@ -44,9 +44,9 @@ class PlotPage : public QWidget
         if (!newArc())
         {
             auto rows = book->run(
-                "WITH numbered AS (SELECT id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters) "
+                "WITH numbered AS (SELECT id,title,position AS seq FROM chapters) "
                 "SELECT c.seq,c.title,s.strand,s.phase,s.note FROM plot_steps s JOIN numbered c ON c.id=s.chapter "
-                "WHERE arc=? ORDER BY s.chapter,s.id",
+                "WHERE arc=? ORDER BY c.seq,s.id",
                 {arcs->currentData()});
             QMap<QString, bool> closed;
             while (rows.next())
@@ -178,7 +178,7 @@ class PlotPage : public QWidget
         }
         int selected = preferredChapter ? preferredChapter : changed ? 0 : chapters->currentData().toInt();
         chapters->clear();
-        auto rows = book->run("SELECT id,title FROM chapters ORDER BY id");
+        auto rows = book->run("SELECT id,title FROM chapters ORDER BY position");
         while (rows.next())
             chapters->addItem(numberedChapter(chapters->count() + 1, rows.value(1).toString()), rows.value(0));
         chapters->setCurrentIndex(qMax(0, chapters->findData(selected)));

@@ -240,5 +240,18 @@ int main(int argc, char **argv)
     app.applicationStateChanged(Qt::ApplicationInactive);
     if (!saved())
         return 39;
+    if (!click("＋ 新章节")) return 54;
+    visibleControl<QLineEdit>(window)->setText("山中番外");
+    visibleControl<QComboBox>(window, "chapterInsertPosition")->setCurrentIndex(1);
+    if (!click("创建章节") || (*chapters)->currentRow() != 1 ||
+        (*chapters)->currentItem()->text() != "第 2 章 · 山中番外" || !editor->toPlainText().isEmpty())
+        return 55;
+    editor->insertPlainText("山中小记。");
+    if (!click("上移") || (*chapters)->currentRow() != 0 || (*chapters)->item(1)->text() != "第 2 章 · 第一章" ||
+        editor->toPlainText() != "山中小记。" || verify.value("SELECT title FROM chapters WHERE position=1") != "山中番外")
+        return 56;
+    if (!click("下移") || (*chapters)->currentItem()->text() != "第 2 章 · 山中番外" ||
+        verify.value("SELECT body FROM chapters WHERE position=2") != "山中小记。")
+        return 57;
     return dialogs.shown.isEmpty() ? 0 : 22;
 }

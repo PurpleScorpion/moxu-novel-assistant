@@ -18,6 +18,7 @@ class NoteEditor : public QWidget
     SaveStatus *status = new SaveStatus;
     QPushButton *removeButton = new QPushButton("删除");
     WritingNote saved;
+    qint64 insertBefore = 0;
     QString displayedBody;
     QString bookFile;
     bool loading = false;
@@ -48,11 +49,20 @@ class NoteEditor : public QWidget
         QScopedValueRollback guard(loading, true);
         status->pending.stop();
         saved = records.value(id);
+        insertBefore = 0;
         title->setText(saved.title);
         body->setPlainText(saved.body);
         displayedBody = body->toPlainText();
         chapters->setCurrentIndex(qMax(0, chapters->findData(saved.chapter)));
         removeButton->setEnabled(saved.id != 0);
+    }
+    void updateOrderButtons()
+    {
+        if (scope != NoteScope::Outline) return;
+        const int row = entries->currentRow();
+        findChild<QPushButton *>("insertOutlineBefore")->setEnabled(row >= 0);
+        findChild<QPushButton *>("outlineUp")->setEnabled(row > 0);
+        findChild<QPushButton *>("outlineDown")->setEnabled(row >= 0 && row + 1 < entries->count());
     }
     void select(qint64 id)
     {
@@ -60,6 +70,7 @@ class NoteEditor : public QWidget
         auto *item = findEntry(id);
         entries->setCurrentItem(item);
         load(item ? id : 0);
+        updateOrderButtons();
     }
     void reload(qint64 preferred)
     {
@@ -114,6 +125,38 @@ class NoteEditor : public QWidget
         list->addWidget(entries);
         auto *add = new QPushButton(outline ? "新增大纲条目" : "新增 Skill");
         list->addWidget(add);
+        if (outline)
+        {
+            auto *before = new QPushButton("在选中条目前插入");
+            before->setObjectName("insertOutlineBefore");
+            list->addWidget(before);
+            connect(before, &QPushButton::clicked, this, [this] {
+                attempt([&] {
+                    flush();
+                    const auto anchor = saved;
+                    select(0);
+                    insertBefore = anchor.id;
+                    status->setText("新条目将插在「" + anchor.title + "」之前");
+                    title->setFocus();
+                });
+            });
+            auto *order = new QHBoxLayout;
+            list->addLayout(order);
+            for (int direction : {-1, 1})
+            {
+                auto *move = new QPushButton(direction < 0 ? "上移" : "下移");
+                order->addWidget(move);
+                connect(move, &QPushButton::clicked, this, [this, direction] {
+                    attempt([&] {
+                        flush();
+                        WritingNotes(*book, this->scope).moveOutline(saved.id, direction);
+                        reload(saved.id);
+                        status->setText("大纲顺序已保存");
+                    });
+                });
+                move->setObjectName(direction < 0 ? "outlineUp" : "outlineDown");
+            }
+        }
         if (!outline)
         {
             auto *loadFile = new QPushButton("导入 SKILL.md…");
@@ -259,7 +302,7 @@ class NoteEditor : public QWidget
         chapters->addItem("全书", 0);
         if (scope == NoteScope::Outline)
         {
-            auto q = book->run("SELECT id,title FROM chapters ORDER BY id");
+            auto q = book->run("SELECT id,title FROM chapters ORDER BY position");
             while (q.next())
                 chapters->addItem(q.value(1).toString(), q.value(0));
         }
@@ -286,17 +329,21 @@ class NoteEditor : public QWidget
                 status->setText("没有待保存的更改");
             return;
         }
-        draft = WritingNotes(*book, scope).save(draft);
+        draft = WritingNotes(*book, scope).save(draft, insertBefore);
         QSignalBlocker block(entries);
         auto *item = findEntry(draft.id);
         if (!item)
         {
-            item = new QListWidgetItem(entries);
+            item = new QListWidgetItem;
+            const auto *anchor = insertBefore ? findEntry(insertBefore) : nullptr;
+            entries->insertItem(anchor ? entries->row(anchor) : entries->count(), item);
+            insertBefore = 0;
             item->setData(Qt::UserRole, draft.id);
         }
         item->setText(label(draft));
         records.insert(draft.id, draft);
         entries->setCurrentItem(item);
+        updateOrderButtons();
         saved = draft;
         displayedBody = editedBody;
         removeButton->setEnabled(true);

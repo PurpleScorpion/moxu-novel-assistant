@@ -613,21 +613,21 @@ data: {"type":"message_stop"}
         click(window, "发送给 AI");
         require(waitStatus("候选正文已就绪") && !wire.contains("章首") && wire.contains("她已将令牌交给渡船人。"),
                 "取消勾选后仍然发送了该章");
-        auto *summaryBox = writingTabs->findChild<QComboBox *>("summaryChapter");
+        auto *summaryBox = writingTabs->findChild<QTableWidget *>("summaryChapter");
         auto *summaryText = writingTabs->findChild<QPlainTextEdit *>("chapterSummaryText");
         auto openSummaries = [&] {
             for (int i = 0; i < writingTabs->count(); ++i)
                 if (writingTabs->tabText(i) == "剧情摘要") writingTabs->setCurrentIndex(i);
         };
         openSummaries();
-        summaryBox->setCurrentIndex(summaryBox->findData(1));
+        summaryBox->setCurrentCell(0, 0);
         click(window, "生成剧情摘要");
-        require(waitStatus("剧情摘要已生成") && summaryText->toPlainText() == "【" + summaryBox->currentText() + "】\n山门前" &&
+        require(waitStatus("剧情摘要已生成") && summaryText->toPlainText() == "【" + summaryBox->currentItem()->text() + "】\n山门前" &&
                     sentMessages().last().toObject()["content"] == originalChapter &&
                     !wire.contains("她已将令牌交给渡船人。"), "生成摘要时混入写作资料或未返回可编辑摘要");
         summaryText->selectAll();
         summaryText->insertPlainText("她在山门取得令牌。");
-        summaryBox->setCurrentIndex(summaryBox->findData(4));
+        summaryBox->setCurrentCell(1, 0);
         require(summaryText->toPlainText().isEmpty() &&
                     check.value("SELECT body FROM chapter_summaries WHERE chapter=1") == "她在山门取得令牌。",
                 "切换章节丢失手改摘要或摘要串章");
@@ -664,12 +664,34 @@ data: {"type":"message_stop"}
                     check.value("SELECT count(*) FROM chapter_summaries").toInt() == 2,
                 "全书批量摘要没有按字数、已有摘要或章节序号正确处理");
         check.run("UPDATE chapters SET body=? WHERE id=9", {QString(1001, QChar(u'甲'))});
-        for (auto *box : window.findChildren<QComboBox *>("summaryChapter"))
-            if (box->isVisible()) box->setCurrentIndex(box->findData(9));
+        for (auto *box : window.findChildren<QTableWidget *>("summaryChapter"))
+            if (box->isVisible()) box->setCurrentCell(2, 0);
         click(window, "生成剧情摘要");
         require(QTest::qWaitFor([&] {
                     return check.value("SELECT body FROM chapter_summaries WHERE chapter=9") == "【第 3 章 · 入城】\n山门前";
                 }), "基础资料指定章节生成失败");
+        check.run("UPDATE chapters SET body=? WHERE id=9", {QString(1001, QChar(u'乙'))});
+        nav->setCurrentRow(0);
+        nav->setCurrentRow(Dossier::summaryIndex);
+        auto *summaryList = visible<QTableWidget>(window);
+        require(summaryList->rowCount() == 4 && summaryList->item(2, 1)->text() == "1001" &&
+                    summaryList->item(2, 2)->text() == "正文已修改" && summaryList->item(1, 2)->text() == "无摘要",
+                "未区分等字数改稿和无摘要章节");
+        summaryList->setCurrentCell(2, 0);
+        click(window, "生成剧情摘要");
+        require(QTest::qWaitFor([&] { return summaryList->item(2, 2)->text() == "已有摘要"; }),
+                "重新生成后仍然提示正文已修改");
+        edit(6, "境界", "从练气开始");
+        click(window, "上移");
+        require(WritingNotes(check, NoteScope::Outline).list().first().title == "境界", "大纲未上移");
+        nav->setCurrentRow(0);
+        nav->setCurrentRow(6);
+        click(window, "下移");
+        require(WritingNotes(check, NoteScope::Outline).list().first().title == "入山", "大纲未下移或选项未恢复");
+        click(window, "在选中条目前插入");
+        visible<QLineEdit>(window)->setText("过渡剧情");
+        click(window, "保存");
+        require(WritingNotes(check, NoteScope::Outline).list().at(1).title == "过渡剧情", "大纲插入位置错误");
         click(window, "进入专注写作");
         server.close();
         openAssistant();
@@ -700,6 +722,16 @@ data: {"type":"message_stop"}
         click(window, "取消请求");
         click(window, "返回正文");
         require(editor->isVisible() && editor->toPlainText() == originalChapter, "取消后正文发生变化");
+        directory->setCurrentRow(2);
+        click(window, "上移");
+        directory->setCurrentRow(2);
+        openAssistant();
+        click(window, "引用上一章");
+        const auto reordered = priorGroup();
+        require(reordered.size() == 2 && reordered.first()->data(WritingSources::ChapterId).toInt() == 9 &&
+                    reordered.first()->checkState() == Qt::Checked && reordered.last()->data(WritingSources::ChapterId).toInt() == 1,
+                "调序后引用了错误的上一章");
+        click(window, "返回正文");
         auto outline = WritingNotes(check, NoteScope::Outline).list().first();
         require(outline.chapter == 1, "大纲未关联章节");
         auto library = WritingNotes(check, NoteScope::Global);

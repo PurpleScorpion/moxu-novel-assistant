@@ -221,7 +221,7 @@ class Dossier : public QWidget
             if (!summaryWorkspace)
             {
                 const int chapter = preferredSnapshotChapter ? preferredSnapshotChapter :
-                    book->value("SELECT min(id) FROM chapters").toInt();
+                    book->value("SELECT id FROM chapters ORDER BY position LIMIT 1").toInt();
                 summaryWorkspace = new WritingAssistant(*book, chapter, {}, false, false, sessionKeys, {}, {}, true);
                 summaryLayout->addWidget(summaryWorkspace, 1);
             }

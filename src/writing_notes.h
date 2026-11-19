@@ -74,15 +74,15 @@ class WritingNotes
     QList<WritingNote> list() const
     {
         QList<WritingNote> result;
-        auto q = query("SELECT id,title,body,chapter,revision,skill_header FROM writing_notes WHERE kind=? ORDER BY "
-                       "COALESCE(chapter,0),id",
+        const QString order = scope == NoteScope::Outline ? "position,id" : "COALESCE(chapter,0),id";
+        auto q = query("SELECT id,title,body,chapter,revision,skill_header FROM writing_notes WHERE kind=? ORDER BY " + order,
                        {kind()});
         while (q.next())
             result.append({q.value(0).toLongLong(), q.value(1).toString(), q.value(2).toString(), q.value(3).toInt(),
                            q.value(4).toInt(), q.value(5).toString()});
         return result;
     }
-    WritingNote save(WritingNote note) const
+    WritingNote save(WritingNote note, qint64 beforeOutline = 0) const
     {
         note.title = note.title.trimmed();
         if (note.body.isNull())
@@ -92,11 +92,22 @@ class WritingNotes
         const QVariant chapter = scope == NoteScope::Outline && note.chapter ? QVariant(note.chapter) : QVariant();
         if (!note.id)
         {
-            note.id =
-                query("INSERT INTO writing_notes(kind,title,body,chapter,skill_header) VALUES(?,?,?,?,COALESCE(?,''))",
-                      {kind(), note.title, note.body, chapter, note.skillHeader})
-                    .lastInsertId()
-                    .toLongLong();
+            auto insert = [&] {
+                note.id = query("INSERT INTO writing_notes(kind,title,body,chapter,skill_header) "
+                                "VALUES(?,?,?,?,COALESCE(?,''))",
+                                {kind(), note.title, note.body, chapter, note.skillHeader}).lastInsertId().toLongLong();
+            };
+            if (scope == NoteScope::Outline && beforeOutline)
+                book.atomic([&] {
+                    const auto at = book.value("SELECT position FROM writing_notes WHERE id=? AND kind='outline'", {beforeOutline});
+                    if (!at.isValid()) throw std::runtime_error("找不到要插入的大纲位置。");
+                    insert();
+                    book.run("UPDATE writing_notes SET position=position+1 WHERE kind='outline' AND position>=? AND id<>?",
+                             {at, note.id});
+                    book.run("UPDATE writing_notes SET position=? WHERE id=?", {at, note.id});
+                });
+            else
+                insert();
         }
         else
         {
@@ -108,6 +119,19 @@ class WritingNotes
         }
         ++note.revision;
         return note;
+    }
+    void moveOutline(qint64 id, int direction) const
+    {
+        if (scope != NoteScope::Outline || (direction != 1 && direction != -1)) return;
+        book.atomic([&] {
+            const auto position = book.value("SELECT position FROM writing_notes WHERE id=? AND kind='outline'", {id});
+            const QString next = direction < 0 ? "position<? ORDER BY position DESC" : "position>? ORDER BY position";
+            auto row = book.run("SELECT id,position FROM writing_notes WHERE kind='outline' AND " + next + " LIMIT 1",
+                                {position});
+            if (!row.next()) return;
+            book.run("UPDATE writing_notes SET position=CASE id WHEN ? THEN ? ELSE ? END WHERE id IN (?,?)",
+                     {id, row.value(1), position, id, row.value(0)});
+        });
     }
     void remove(const WritingNote &note) const
     {

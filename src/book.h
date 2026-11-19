@@ -94,6 +94,8 @@ class Book
     QVariant value(const QString &sql, const QVariantList &args = {}) const;
     void atomic(const std::function<void()> &operation);
     void save(int chapter, const QString &body, SaveMode mode = SaveMode::Checkpoint);
+    int insertChapter(const QString &title, int anchor = 0, bool after = false);
+    void moveChapter(int id, int direction);
     HistoryLimits historyLimits() const;
     HistoryUsage historyUsage() const;
     qint64 historyRemovalCount(HistoryLimits limits) const;

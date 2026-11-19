@@ -139,7 +139,7 @@ class WritingAssistant : public QWidget
                 QString part =
                     "【" + section.name + " · " + item->text() + "】\n" + item->data(WritingSources::Body).toString();
                 if (group == WritingSources::Full || group == WritingSources::Summary)
-                    preceding.insert(item->data(WritingSources::ChapterId).toInt(), part);
+                    preceding.insert(item->data(WritingSources::ChapterOrder).toInt(), part);
                 else if (group == WritingSources::Outline)
                     outlines.append(part);
                 else
@@ -583,10 +583,15 @@ class WritingAssistant : public QWidget
         panes->addWidget(workspace);
         panes->setSizes({258, 790});
         panes->setStretchFactor(1, 1);
-        QMap<int, QString> chapters;
-        auto q = book.run("SELECT id,title FROM chapters ORDER BY id");
+        QHash<int, QString> chapters;
+        QList<int> chapterOrder;
+        auto q = book.run("SELECT id,title FROM chapters ORDER BY position");
         while (q.next())
-            chapters[q.value(0).toInt()] = q.value(1).toString();
+        {
+            const int id = q.value(0).toInt();
+            chapters[id] = q.value(1).toString();
+            chapterOrder.append(id);
+        }
         for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
         {
             const auto group = scope == NoteScope::Global ? WritingSources::GlobalSkill :
@@ -609,23 +614,26 @@ class WritingAssistant : public QWidget
         sources->addHeading(WritingSources::Full, "前章全文");
         sources->addHeading(WritingSources::Summary, "前章摘要");
         QSet<int> availableSummaries;
-        auto stored = book.run("SELECT chapter FROM chapter_summaries WHERE chapter < ?", {currentChapter});
+        auto stored = book.run("SELECT chapter FROM chapter_summaries");
         while (stored.next())
             availableSummaries.insert(stored.value(0).toInt());
-        auto it = chapters.constFind(currentChapter);
-        int number = int(std::distance(chapters.cbegin(), it)) + 1;
-        targetChapter = numberedChapter(number, chapters.value(currentChapter));
-        while (!summaryOnly && it != chapters.cbegin())
+        const int currentIndex = chapterOrder.indexOf(currentChapter);
+        targetChapter = numberedChapter(currentIndex + 1, chapters.value(currentChapter));
+        for (int i = currentIndex - 1; !summaryOnly && i >= 0; --i)
         {
-            --it;
-            const auto label = numberedChapter(--number, it.value());
-            fullEntries.insert(it.key(), sources->addEntry(WritingSources::Full, label, {}, it.key()));
-            summaryEntries.insert(it.key(), sources->addEntry(WritingSources::Summary, label, {}, it.key(),
-                                                               availableSummaries.contains(it.key())));
+            const int id = chapterOrder.at(i);
+            const auto label = numberedChapter(i + 1, chapters.value(id));
+            auto *full = sources->addEntry(WritingSources::Full, label, {}, id);
+            auto *summary = sources->addEntry(WritingSources::Summary, label, {}, id, availableSummaries.contains(id));
+            full->setData(WritingSources::ChapterOrder, i);
+            summary->setData(WritingSources::ChapterOrder, i);
+            fullEntries.insert(id, full);
+            summaryEntries.insert(id, summary);
         }
         sources->sections[WritingSources::Full].heading->setHidden(fullEntries.isEmpty());
         sources->restoreGroups(fullEntries.size() <= 3);
-        sources->sections[WritingSources::Summary].heading->setHidden(availableSummaries.isEmpty());
+        sources->sections[WritingSources::Summary].heading->setHidden(std::none_of(summaryEntries.cbegin(), summaryEntries.cend(),
+            [](const auto *item) { return item->data(WritingSources::Available).toBool(); }));
         chapterTitle->setText(targetChapter);
         auto *compose = new QWidget;
         auto *inputs = new QVBoxLayout(compose);
@@ -643,7 +651,7 @@ class WritingAssistant : public QWidget
         usePrevious->setVisible(!fullEntries.isEmpty());
         usePrevious->setToolTip("勾选上一章全文。更早的章节可以在左侧勾选已保存的摘要。");
         connect(usePrevious, &QPushButton::clicked, this, [this] {
-            auto *item = fullEntries.last();
+            auto *item = sources->sections[WritingSources::Full].entries.first();
             item->setCheckState(Qt::Checked);
             sources->setExpanded(WritingSources::Full, true);
             sources->scrollToItem(item);
@@ -667,7 +675,7 @@ class WritingAssistant : public QWidget
         comparison->setOpenLinks(false);
         comparison->setObjectName("chapterComparison");
         tabs->setTabVisible(tabs->addTab(comparison, "整章对比"), false);
-        summaries = new ChapterSummary(book, chapters, currentChapter, [this](int id, const QString &text) {
+        summaries = new ChapterSummary(book, currentChapter, [this](int id, const QString &text) {
             if (auto *item = summaryEntries.value(id))
             {
                 QSignalBlocker block(sources);

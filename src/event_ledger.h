@@ -45,7 +45,7 @@ class EventLedger : public QStackedWidget
         bar->addWidget(cancel);
         auto *chapter = new DownwardCombo;
         chapter->setObjectName("ledgerChapter");
-        auto rows = book->run("SELECT id,title FROM chapters ORDER BY id");
+        auto rows = book->run("SELECT id,title FROM chapters ORDER BY position");
         while (rows.next())
             chapter->addItem(numberedChapter(chapter->count() + 1, rows.value(1).toString()), rows.value(0));
         chapter->setCurrentIndex(qMax(0, chapter->findData(preferredChapter)));

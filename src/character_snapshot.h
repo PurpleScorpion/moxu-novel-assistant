@@ -160,7 +160,7 @@ class CharacterSnapshot : public QWidget
         book = &source;
         QSignalBlocker block(chapters);
         chapters->clear();
-        auto q = source.run("SELECT id,title FROM chapters ORDER BY id");
+        auto q = source.run("SELECT id,title FROM chapters ORDER BY position");
         while (q.next())
             chapters->addItem(numberedChapter(chapters->count() + 1, q.value(1).toString()), q.value(0));
         int index = chapters->findData(selected ? selected : preferredChapter);

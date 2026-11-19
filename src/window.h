@@ -197,6 +197,12 @@ class Window : public QMainWindow
         dirty = false;
         status->setText("已保存");
     }
+    void refreshChapterMoves()
+    {
+        const int row = chapters->currentRow();
+        writer->findChild<QPushButton *>("chapterUp")->setEnabled(row > 0);
+        writer->findChild<QPushButton *>("chapterDown")->setEnabled(row >= 0 && row + 1 < chapters->count());
+    }
     void loadChapter(int id)
     {
         auto q = book->run("SELECT title,body FROM chapters WHERE id=?", {id});
@@ -206,14 +212,16 @@ class Window : public QMainWindow
         chapter = id;
         QSignalBlocker noEdit(editor);
         heading->setText(q.value(0).toString());
+        refreshChapterMoves();
         chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow() + 1).arg(chapters->count()));
         editor->setPlainText(q.value(1).toString());
         dirty = false;
         status->setText("已保存");
     }
-    void addChapterItem(int id, const QString &name)
+    void addChapterItem(int id, const QString &name, int index = -1)
     {
-        auto *item = new QListWidgetItem(chapters);
+        auto *item = new QListWidgetItem;
+        chapters->insertItem(index < 0 ? chapters->count() : index, item);
         setChapterLabel(item, name);
         item->setData(Qt::UserRole, id);
     }
@@ -462,7 +470,7 @@ class Window : public QMainWindow
             throw std::runtime_error("无法锁定书籍，请检查是否已打开以及目录写入权限。");
         auto next = std::make_unique<Book>(path, title);
         auto name = next->value("SELECT title FROM meta").toString();
-        auto q = next->run("SELECT id,title FROM chapters ORDER BY id");
+        auto q = next->run("SELECT id,title FROM chapters ORDER BY position");
         QSignalBlocker block(chapters);
         chapters->clear();
         while (q.next())
@@ -680,11 +688,11 @@ class Window : public QMainWindow
     }
     void timeline()
     {
-        auto q = book->run("WITH numbered AS (SELECT id,title,row_number() OVER(ORDER BY id) AS seq FROM chapters) "
+        auto q = book->run("WITH numbered AS (SELECT id,title,position AS seq FROM chapters) "
                            "SELECT c.title,p.name,e.description,e.resource,e.delta,SUM(delta) OVER(PARTITION BY "
-                           "person,resource ORDER BY chapter,e.anchor,e.plot,e.id),c.id,c.seq FROM journal e JOIN "
+                           "person,resource ORDER BY c.seq,e.anchor,e.plot,e.id),c.id,c.seq FROM journal e JOIN "
                            "numbered c ON c.id=e.chapter "
-                           "LEFT JOIN people p ON p.id=e.person ORDER BY chapter,e.anchor,e.plot,e.id");
+                           "LEFT JOIN people p ON p.id=e.person ORDER BY c.seq,e.anchor,e.plot,e.id");
         beginSheet("时间轴与收支明细");
         auto *view = new QTextEdit;
         view->setReadOnly(true);
@@ -897,7 +905,7 @@ class Window : public QMainWindow
                 QSaveFile file(target);
                 if (!file.open(QIODevice::WriteOnly))
                     throw std::runtime_error("无法打开导出文件。");
-                auto q = book->run("SELECT title,body FROM chapters ORDER BY id");
+                auto q = book->run("SELECT title,body FROM chapters ORDER BY position");
                 while (q.next())
                 {
                     auto bytes = (q.value(0).toString() + "\n\n" + q.value(1).toString() + "\n\n").toUtf8();
@@ -1024,18 +1032,49 @@ class Window : public QMainWindow
         collapse->setObjectName("collapseChapters");
         directoryHeader->addWidget(collapse);
         left->addWidget(chapters);
+        auto *order = new QHBoxLayout;
+        left->addLayout(order);
+        for (int direction : {-1, 1})
+        {
+            auto *move = button(order, direction < 0 ? "上移" : "下移", [this, direction] {
+                save();
+                const int row = chapters->currentRow(), target = row + direction;
+                if (target < 0 || target >= chapters->count()) return;
+                book->moveChapter(chapter, direction);
+                QSignalBlocker block(chapters);
+                auto *item = chapters->takeItem(row);
+                chapters->insertItem(target, item);
+                chapters->setCurrentItem(item);
+                for (int i : {row, target}) setChapterLabel(chapters->item(i), chapters->item(i)->toolTip());
+                closeSheet();
+                chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(target + 1).arg(chapters->count()));
+                status->setText("章节顺序已保存");
+                refreshChapterMoves();
+            });
+            move->setObjectName(direction < 0 ? "chapterUp" : "chapterDown");
+        }
         button(left, "＋ 新章节", [this] {
             save();
             beginSheet("新建章节");
             auto *name = sheet->field("章节名");
+            auto *position = new DownwardCombo;
+            position->addItems({"书末", "当前章之前", "当前章之后"});
+            position->setObjectName("chapterInsertPosition");
+            sheet->form->addWidget(new QLabel("插入位置"));
+            sheet->form->addWidget(position);
             name->setFocus();
-            button(sheet->form, "创建章节", [this, name] {
-                QString title = name->text().trimmed();
+            button(sheet->form, "创建章节", [this, name, position] {
+                const auto title = name->text().trimmed();
                 if (title.isEmpty())
                     throw std::runtime_error("请填写章节名。");
-                auto id = book->run("INSERT INTO chapters(title) VALUES(?)", {title}).lastInsertId().toInt();
-                addChapterItem(id, title);
-                chapters->setCurrentRow(chapters->count() - 1);
+                save();
+                const int where = position->currentIndex();
+                const int row = where ? chapters->currentRow() + int(where == 2) : chapters->count();
+                const int id = book->insertChapter(title, where ? chapter : 0, where == 2);
+                addChapterItem(id, title, row);
+                for (int i = row + 1; i < chapters->count(); ++i)
+                    setChapterLabel(chapters->item(i), chapters->item(i)->toolTip());
+                chapters->setCurrentRow(row);
             });
         });
         auto *right = panelColumn(cols, 5);
