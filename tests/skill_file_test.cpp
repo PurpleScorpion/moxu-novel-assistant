@@ -62,7 +62,8 @@ int main(int argc, char **argv)
             old.run("INSERT INTO writing_notes(kind,title,body) VALUES('skill','我的规则','使用短句。')");
         }
         Book book(path);
-        Dossier page([] {}, [] {}, [] {}, [](QString) {});
+        QHash<QString, QString> sessionKeys;
+        Dossier page(sessionKeys, [] {}, [] {}, [] {}, [](QString) {});
         page.enter(&book);
         page.show();
         auto *nav = page.findChild<QListWidget *>("navigation");

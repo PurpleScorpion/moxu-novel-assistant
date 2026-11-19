@@ -8,11 +8,20 @@
 #include "interface.h"
 #include "plot_page.h"
 #include "note_editor.h"
+#include "writing_assistant.h"
 #include <functional>
 
 class Dossier : public QWidget
 {
     Book *book = nullptr;
+    QHash<QString, QString> &sessionKeys;
+    QVBoxLayout *summaryLayout = nullptr;
+    WritingAssistant *summaryWorkspace = nullptr;
+    void closeSummaryWorkspace()
+    {
+        delete summaryWorkspace;
+        summaryWorkspace = nullptr;
+    }
     QListWidget *navigation = new QListWidget, *people = new QListWidget;
     QStackedWidget *details = new QStackedWidget;
     QLineEdit *title = new QLineEdit, *name = new QLineEdit;
@@ -207,12 +216,23 @@ class Dossier : public QWidget
             plots->load(*book);
         else if (page == plotIndex + 1)
             catalogPage->load(*book);
+        else if (page == summaryIndex)
+        {
+            if (!summaryWorkspace)
+            {
+                const int chapter = preferredSnapshotChapter ? preferredSnapshotChapter :
+                    book->value("SELECT min(id) FROM chapters").toInt();
+                summaryWorkspace = new WritingAssistant(*book, chapter, {}, false, false, sessionKeys, {}, {}, true);
+                summaryLayout->addWidget(summaryWorkspace, 1);
+            }
+        }
         else
             notePages.at(page - 4)->enter(book);
     }
 
   public:
     static constexpr int plotIndex = 7;
+    static constexpr int summaryIndex = plotIndex + 2;
     int currentPage() const
     {
         return details->currentIndex();
@@ -235,12 +255,13 @@ class Dossier : public QWidget
     }
     void resetBook()
     {
+        closeSummaryWorkspace();
         ledger->resetBook();
         catalogPage->resetBook();
     }
-    Dossier(std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
+    Dossier(QHash<QString, QString> &keys, std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
             std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {})
-        : renameBook(std::move(rename)), ledger(new EventLedger(appended))
+        : sessionKeys(keys), renameBook(std::move(rename)), ledger(new EventLedger(appended))
     {
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(22, 16, 22, 16);
@@ -254,12 +275,14 @@ class Dossier : public QWidget
             navigation->addItem(scopeName(scope));
         navigation->addItem("剧情大事");
         navigation->addItem("资源管理");
+        navigation->addItem("剧情摘要");
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
         connect(write, &QPushButton::clicked, this, [=, this] {
             safe([&] {
                 flush();
+                closeSummaryWorkspace();
                 focus();
             });
         });
@@ -472,6 +495,7 @@ class Dossier : public QWidget
         }
         section("剧情大事")->addWidget(plots, 1);
         section("资源管理")->addWidget(catalogPage, 1);
+        summaryLayout = section("剧情摘要", false);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;
@@ -489,6 +513,8 @@ class Dossier : public QWidget
                     throw;
                 }
                 details->setCurrentIndex(page);
+                if (current == summaryIndex && page != summaryIndex)
+                    closeSummaryWorkspace();
                 notice->clear();
             });
         });
@@ -498,6 +524,8 @@ class Dossier : public QWidget
         notice->pending.stop();
         if (!book)
             return;
+        if (summaryWorkspace)
+            summaryWorkspace->flushSummary();
         if (details->currentIndex() >= 4 && details->currentIndex() < plotIndex)
             notePages.at(details->currentIndex() - 4)->flush();
         if (details->currentIndex() == 1)
@@ -543,6 +571,8 @@ class Dossier : public QWidget
             notePages.at(page - 4)->saveNow();
         else if (page == plotIndex)
             plots->saveNow();
+        else if (page == summaryIndex && summaryWorkspace)
+            safe([this] { summaryWorkspace->flushSummary(); notice->confirm("剧情摘要"); });
         else if (page == 2 && saveRelation->isVisible())
             saveRelation->click();
         else if (page == 0 || page == 1)

@@ -1164,7 +1164,7 @@ class Window : public QMainWindow
                 editor->setFocus();
         };
         dossier = new Dossier(
-            focusWriter, [this] { showShelf(); }, [this] { graph(); },
+            sessionKeys, focusWriter, [this] { showShelf(); }, [this] { graph(); },
             [this](QString n) { setWindowTitle(n + " · 墨序"); },
             [this](int target, const QString &addition) {
                 if (target != chapter)

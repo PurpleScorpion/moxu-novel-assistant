@@ -1,5 +1,6 @@
 #pragma once
 #include "book.h"
+#include "chapter_text.h"
 #include "downward_combo.h"
 #include <QtWidgets>
 #include <functional>
@@ -11,10 +12,67 @@ class ChapterSummary : public QWidget
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *notice = new QLabel;
     QTimer delay;
+    QTimer batchStep;
+    int nextIndex = -1, savedCount = 0, shortCount = 0, existingCount = 0;
     int chapter = 0;
     std::function<void(int, const QString &)> changed;
+    std::function<bool(QString)> request;
+    std::function<void(bool)> batchBusy;
+
+    bool generateChapter(int index)
+    {
+        const int id = chapters->itemData(index).toInt();
+        const auto body = book.value("SELECT body FROM chapters WHERE id=?", {id}).toString();
+        const auto length = chapterWordCount(body);
+        if (length < 1000)
+        {
+            ++shortCount;
+            notice->setText(QString("%1 · 正文 %2 字，满 1000 字可生成摘要。").arg(chapters->itemText(index)).arg(length));
+            return false;
+        }
+        chapters->setCurrentIndex(index);
+        if (chapter != id || !request(body))
+        {
+            stopBatch();
+            return false;
+        }
+        return true;
+    }
+    void advanceBatch()
+    {
+        try
+        {
+            if (nextIndex >= chapters->count())
+            {
+                stopBatch();
+                notice->setText(QString("已生成 %1 章，已有摘要 %2 章，不足 1000 字 %3 章。")
+                                    .arg(savedCount).arg(existingCount).arg(shortCount));
+                return;
+            }
+            const int index = nextIndex++;
+            if (book.value("SELECT 1 FROM chapter_summaries WHERE chapter=?", {chapters->itemData(index)}).isValid())
+                ++existingCount;
+            else if (generateChapter(index))
+                return;
+            if (nextIndex >= 0)
+                batchStep.start(0);
+        }
+        catch (const std::exception &e)
+        {
+            stopBatch();
+            notice->setText(QString::fromUtf8(e.what()));
+        }
+    }
 
   public:
+    bool batchActive() const { return nextIndex >= 0; }
+    void stopBatch()
+    {
+        batchStep.stop();
+        if (!batchActive()) return;
+        nextIndex = -1;
+        batchBusy(false);
+    }
     void flush()
     {
         delay.stop();
@@ -35,16 +93,24 @@ class ChapterSummary : public QWidget
         try { flush(); return true; }
         catch (const std::exception &e) { notice->setText(QString::fromUtf8(e.what())); return false; }
     }
-    void generated(const QString &text)
+    bool generated(const QString &text)
     {
         QTextCursor cursor(editor->document());
         cursor.select(QTextCursor::Document);
-        cursor.insertText(text.trimmed());
-        saveEdits();
+        cursor.insertText(QString("【%1】\n").arg(chapters->currentText()) + text.trimmed());
+        if (!saveEdits()) return false;
+        if (nextIndex >= 0)
+        {
+            ++savedCount;
+            setEnabled(false);
+            batchStep.start(0);
+        }
+        return true;
     }
     ChapterSummary(Book &source, const QMap<int, QString> &names, int current,
-                   std::function<void(int, const QString &)> saved, std::function<void(QString)> generate)
-        : book(source), changed(std::move(saved))
+                   std::function<void(int, const QString &)> saved, std::function<bool(QString)> generate,
+                   bool allChapters, std::function<void(bool)> setBatchBusy)
+        : book(source), changed(std::move(saved)), request(std::move(generate)), batchBusy(std::move(setBatchBusy))
     {
         auto *layout = new QVBoxLayout(this);
         auto *row = new QHBoxLayout;
@@ -56,7 +122,21 @@ class ChapterSummary : public QWidget
         create->setToolTip("将所选章节全文发送到当前模型。生成成功后可编辑或撤销。");
         row->addWidget(create);
         int number = 0;
-        for (auto it = names.cbegin(); it != names.cend() && it.key() <= current; ++it)
+        if (allChapters)
+        {
+            auto *batch = new QPushButton("一键生成缺失摘要");
+            batch->setToolTip("逐章生成本书满 1000 字且没有摘要的章节；已有摘要保留。");
+            row->addWidget(batch);
+            batchStep.setSingleShot(true);
+            connect(&batchStep, &QTimer::timeout, this, &ChapterSummary::advanceBatch);
+            connect(batch, &QPushButton::clicked, this, [this] {
+                if (!saveEdits()) return;
+                nextIndex = savedCount = existingCount = shortCount = 0;
+                batchBusy(true);
+                advanceBatch();
+            });
+        }
+        for (auto it = names.cbegin(); it != names.cend() && (allChapters || it.key() <= current); ++it)
             chapters->addItem(numberedChapter(++number, it.value()), it.key());
         auto load = [this] {
             int id = chapters->currentData().toInt();
@@ -93,13 +173,11 @@ class ChapterSummary : public QWidget
                 notice->setText(QString::fromUtf8(e.what()));
             }
         });
-        connect(create, &QPushButton::clicked, this, [this, generate] {
+        connect(create, &QPushButton::clicked, this, [this] {
             try
             {
                 flush();
-                auto body = book.value("SELECT body FROM chapters WHERE id=?", {chapter}).toString();
-                if (body.trimmed().isEmpty()) notice->setText("本章尚无正文，可以先手写摘要。");
-                else generate(body);
+                generateChapter(chapters->currentIndex());
             }
             catch (const std::exception &e) { notice->setText(QString::fromUtf8(e.what())); }
         });

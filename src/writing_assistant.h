@@ -273,7 +273,7 @@ class WritingAssistant : public QWidget
         {
             auto [rules, input] = summarizing
                 ? qMakePair(QStringLiteral("为小说作者整理本章剧情摘要。用约 150 至 300 个中文字，记录已经发生的关键事件、"
-                                           "人物关系与资源变化、未解线索以及章末状态。忠于正文，不续写，不推测，只返回摘要。"),
+                                           "人物关系与资源变化、未解线索以及章末状态。忠于正文，只返回摘要内容，章节标题由软件添加。"),
                             summarySource)
                 : messages();
             if (site().messagesApi())
@@ -329,9 +329,11 @@ class WritingAssistant : public QWidget
             deadline.stop();
             pending = nullptr;
             reply->deleteLater();
-            setBusy(false);
+            setBusy(summaries->batchActive());
             bool completed = false;
             auto restoreEditor = qScopeGuard([&] {
+                if (summarizing && !completed)
+                    summaries->stopBatch();
                 if (writing && !completed)
                 {
                     result->setPlainText(previousDraft);
@@ -433,8 +435,8 @@ class WritingAssistant : public QWidget
                 if (truncated) status->setText("摘要输出中断，原摘要已保留。");
                 else
                 {
-                    summaries->generated(text);
-                    status->setText("剧情摘要已生成，可继续编辑。");
+                    completed = summaries->generated(text);
+                    status->setText(completed ? "剧情摘要已生成，可继续编辑。" : "摘要保存失败，请查看提示。");
                 }
                 return;
             }
@@ -472,7 +474,7 @@ class WritingAssistant : public QWidget
         }
     }
     WritingAssistant(Book &book, int currentChapter, QString excerpt, bool replacing, bool entireSelection, QHash<QString, QString> &keys,
-                     std::function<void()> back, std::function<void(QString, bool)> accept)
+                     std::function<void()> back, std::function<void(QString, bool)> accept, bool summaryOnly = false)
         : wholeSelection(entireSelection), sessionKeys(keys)
     {
         auto *stack = new QStackedLayout(this);
@@ -590,6 +592,7 @@ class WritingAssistant : public QWidget
             const auto group = scope == NoteScope::Global ? WritingSources::GlobalSkill :
                                scope == NoteScope::Book ? WritingSources::BookSkill : WritingSources::Outline;
             sources->addHeading(group, scopeName(scope));
+            if (summaryOnly) continue;
             for (const auto &note : WritingNotes(book, scope).list())
             {
                 QString label = note.title;
@@ -612,7 +615,7 @@ class WritingAssistant : public QWidget
         auto it = chapters.constFind(currentChapter);
         int number = int(std::distance(chapters.cbegin(), it)) + 1;
         targetChapter = numberedChapter(number, chapters.value(currentChapter));
-        while (it != chapters.cbegin())
+        while (!summaryOnly && it != chapters.cbegin())
         {
             --it;
             const auto label = numberedChapter(--number, it.value());
@@ -621,7 +624,7 @@ class WritingAssistant : public QWidget
                                                                availableSummaries.contains(it.key())));
         }
         sources->sections[WritingSources::Full].heading->setHidden(fullEntries.isEmpty());
-        sources->setExpanded(WritingSources::Full, fullEntries.size() <= 3);
+        sources->restoreGroups(fullEntries.size() <= 3);
         sources->sections[WritingSources::Summary].heading->setHidden(availableSummaries.isEmpty());
         chapterTitle->setText(targetChapter);
         auto *compose = new QWidget;
@@ -678,7 +681,10 @@ class WritingAssistant : public QWidget
                 sources->sections[WritingSources::Summary].heading->setHidden(!any);
             }
             updatePreview();
-        }, [this](QString body) { submit(Request::Summary, body); });
+        }, [this](QString body) {
+            submit(Request::Summary, body);
+            return !pending.isNull();
+        }, summaryOnly, [this](bool busy) { setBusy(busy); });
         tabs->addTab(summaries, "剧情摘要");
         preview->setReadOnly(true);
         result->setReadOnly(true);
@@ -800,6 +806,11 @@ class WritingAssistant : public QWidget
         connect(stop, &QPushButton::clicked, this, [this] {
             if (pending)
                 pending->abort();
+            else if (summaries->batchActive())
+            {
+                summaries->stopBatch();
+                status->setText("已停止批量生成，已保存的摘要可继续使用。");
+            }
         });
         connect(close, &QPushButton::clicked, this, [this, back] {
             if (!summaries->saveEdits()) return;
@@ -815,5 +826,21 @@ class WritingAssistant : public QWidget
             if (!result->toPlainText().trimmed().isEmpty())
                 accept(result->toPlainText(), true);
         });
+        if (summaryOnly)
+        {
+            layout->setContentsMargins(0, 0, 0, 0);
+            heading->hide();
+            chapterTitle->hide();
+            close->hide();
+            library->hide();
+            top->insertWidget(0, new QLabel("服务"));
+            top->insertWidget(1, service);
+            top->insertWidget(2, new QLabel("模型"));
+            top->insertWidget(3, model, 1);
+            top->insertWidget(4, key, 1);
+            top->insertWidget(5, test);
+            tabs->setCurrentWidget(summaries);
+            tabs->tabBar()->hide();
+        }
     }
 };

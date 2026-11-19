@@ -581,6 +581,18 @@ data: {"type":"message_stop"}
             require(!QToolTip::isVisible(), "鼠标悬停时出现资料提示");
         }
         materials->sections[WritingSources::GlobalSkill].entries.first()->setCheckState(Qt::Unchecked);
+        auto *child = materials->sections[WritingSources::BookSkill].entries.first();
+        materials->scrollToItem(child);
+        const auto row = materials->visualItemRect(child);
+        auto clickRowAt = [&](int offset) {
+            QTest::mouseClick(materials->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              QPoint(row.left() + offset, row.center().y()));
+        };
+        clickRowAt(10);
+        require(child->checkState() == Qt::Unchecked, "缩进留白误触了复选框");
+        clickRowAt(31);
+        require(child->checkState() == Qt::Checked, "缩进后的复选框无法点击");
+        clickRowAt(31);
         click(window, "引用上一章");
         prior.at(1)->setCheckState(Qt::Checked);
         auto *writingTabs = visible<QTabWidget>(window);
@@ -610,7 +622,7 @@ data: {"type":"message_stop"}
         openSummaries();
         summaryBox->setCurrentIndex(summaryBox->findData(1));
         click(window, "生成剧情摘要");
-        require(waitStatus("剧情摘要已生成") && summaryText->toPlainText() == "山门前" &&
+        require(waitStatus("剧情摘要已生成") && summaryText->toPlainText() == "【" + summaryBox->currentText() + "】\n山门前" &&
                     sentMessages().last().toObject()["content"] == originalChapter &&
                     !wire.contains("她已将令牌交给渡船人。"), "生成摘要时混入写作资料或未返回可编辑摘要");
         summaryText->selectAll();
@@ -619,6 +631,9 @@ data: {"type":"message_stop"}
         require(summaryText->toPlainText().isEmpty() &&
                     check.value("SELECT body FROM chapter_summaries WHERE chapter=1") == "她在山门取得令牌。",
                 "切换章节丢失手改摘要或摘要串章");
+        const auto previousWire = wire;
+        click(window, "生成剧情摘要");
+        require(waitStatus("满 1000 字可生成摘要") && wire == previousWire, "短章节仍发起摘要请求");
         writingTabs->setCurrentIndex(0);
         auto *firstSummary = writingSources()->sections[WritingSources::Summary].entries.at(1);
         prior.at(1)->setCheckState(Qt::Checked);
@@ -634,10 +649,33 @@ data: {"type":"message_stop"}
                 "摘要和最近一章全文未按顺序发送，或泄漏了旧章正文");
         prior.at(1)->setCheckState(Qt::Checked);
         require(firstSummary->checkState() == Qt::Unchecked, "切回全文时未移除摘要");
+        toggleGroup(WritingSources::GlobalSkill);
         click(window, "返回正文");
         directory->setCurrentRow(0);
+        check.run("UPDATE chapters SET body=? WHERE id=9", {QString(999, QChar(u'字')) + QString(50, QChar(u'。'))});
+        check.run("UPDATE chapters SET body=? WHERE id=12", {QString(1000, QChar(u'文'))});
+        for (auto *action : window.findChildren<QAction *>())
+            if (action->text() == "返回资料工作区") action->trigger();
+        nav->setCurrentRow(Dossier::summaryIndex);
+        click(window, "一键生成缺失摘要");
+        require(waitStatus("已生成 1 章，已有摘要 1 章，不足 1000 字 2 章") &&
+                    check.value("SELECT body FROM chapter_summaries WHERE chapter=12") == "【第 4 章 · 尾声】\n山门前" &&
+                    check.value("SELECT body FROM chapter_summaries WHERE chapter=1") == "她在山门取得令牌。" &&
+                    check.value("SELECT count(*) FROM chapter_summaries").toInt() == 2,
+                "全书批量摘要没有按字数、已有摘要或章节序号正确处理");
+        check.run("UPDATE chapters SET body=? WHERE id=9", {QString(1001, QChar(u'甲'))});
+        for (auto *box : window.findChildren<QComboBox *>("summaryChapter"))
+            if (box->isVisible()) box->setCurrentIndex(box->findData(9));
+        click(window, "生成剧情摘要");
+        require(QTest::qWaitFor([&] {
+                    return check.value("SELECT body FROM chapter_summaries WHERE chapter=9") == "【第 3 章 · 入城】\n山门前";
+                }), "基础资料指定章节生成失败");
+        click(window, "进入专注写作");
         server.close();
         openAssistant();
+        const auto &restored = writingSources()->sections[WritingSources::GlobalSkill];
+        require(!restored.expanded && restored.entries.first()->isHidden() &&
+                    writingSources()->sections[WritingSources::BookSkill].expanded, "重新打开 AI 写作后分组状态错误");
         click(window, "发送给 AI");
         QDeadlineTimer failureTimeout(5000);
         bool failed = false;
