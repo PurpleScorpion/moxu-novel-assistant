@@ -820,14 +820,33 @@ class WritingAssistant : public QWidget
                 pending->abort();
             back();
         });
-        connect(apply, &QPushButton::clicked, this, [this, accept] {
-            if (!result->toPlainText().trimmed().isEmpty())
-                accept(result->toPlainText(), false);
-        });
-        connect(applyChapter, &QPushButton::clicked, this, [this, accept] {
-            if (!result->toPlainText().trimmed().isEmpty())
-                accept(result->toPlainText(), true);
-        });
+        auto adopt = [this, accept, replacing](bool wholeChapter) {
+            const auto text = result->toPlainText();
+            if (text.trimmed().isEmpty()) return;
+            if (!wholeChapter && !replacing)
+            {
+                accept(text, false);
+                return;
+            }
+            const QString action = wholeChapter ? "确认覆盖" : "确认替换";
+            auto *dialog = new QMessageBox(QMessageBox::Question, wholeChapter ? "覆盖本章" : "替换选区",
+                wholeChapter ? "用候选稿覆盖本章全部正文？" : "用候选稿替换进入 AI 写作时选中的文字？",
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            dialog->setOption(QMessageBox::Option::DontUseNativeDialog);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setTextFormat(Qt::PlainText);
+            dialog->setInformativeText(targetChapter + "\n确认后将保存并返回正文，可按 Ctrl+Z 撤销。");
+            dialog->button(QMessageBox::Ok)->setText(action);
+            dialog->button(QMessageBox::Cancel)->setText("取消");
+            dialog->setDefaultButton(QMessageBox::Cancel);
+            dialog->setEscapeButton(QMessageBox::Cancel);
+            connect(dialog, &QDialog::finished, this, [accept, text, wholeChapter](int choice) {
+                if (choice == QMessageBox::Ok) accept(text, wholeChapter);
+            });
+            dialog->open();
+        };
+        connect(apply, &QPushButton::clicked, this, [adopt] { adopt(false); });
+        connect(applyChapter, &QPushButton::clicked, this, [adopt] { adopt(true); });
         if (summaryOnly)
         {
             layout->setContentsMargins(0, 0, 0, 0);

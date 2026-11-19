@@ -27,6 +27,14 @@ void click(QWidget &window, QString label)
         }
     throw std::runtime_error(("找不到按钮 " + label).toStdString());
 }
+
+void answerReplacement(const QString &action, bool confirm)
+{
+    auto *dialog = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+    require(dialog && dialog->button(QMessageBox::Ok)->text() == action &&
+                dialog->defaultButton() == dialog->button(QMessageBox::Cancel), "替换确认弹窗或默认选项错误");
+    dialog->button(confirm ? QMessageBox::Ok : QMessageBox::Cancel)->click();
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -442,7 +450,12 @@ data: {"type":"message_stop"}
                     !draft->isReadOnly() && accept->isEnabled(), "修改失败丢失上一版候选正文或修改意见");
         accept->click();
         Book check(path);
-        require(check.value("SELECT body FROM chapters WHERE id=1").toString() == "甲在山门前。", "选区替换未保存");
+        answerReplacement("确认替换", false);
+        require(draft->isVisible() && draft->toPlainText() == "山门前" &&
+                    check.value("SELECT body FROM chapters WHERE id=1") == "甲在山下。", "取消替换时修改了正文或离开了候选稿");
+        accept->click();
+        answerReplacement("确认替换", true);
+        require(editor->isVisible() && check.value("SELECT body FROM chapters WHERE id=1") == "甲在山门前。", "确认替换后未保存或未返回正文");
         require(server.listen(QHostAddress::LocalHost, port), "无法启动整章改稿测试");
         const QString passage = "旧第一段𠀀。\n\n旧第二段。";
         const QString prefix = passage + "\n分界。\n", suffix = "\n尾声。";
@@ -464,11 +477,13 @@ data: {"type":"message_stop"}
         revised->setPlainText(polished);
         editor->setPlainText(source + "后续改动");
         click(window, "采纳并替换选区");
+        answerReplacement("确认替换", true);
         require(revised->isVisible() && editor->toPlainText() == source + "后续改动",
                 "原文已变化时仍然写入了旧选区");
         // Reloading the same text invalidates live QTextCursor anchors, even though the manuscript is identical.
         editor->setPlainText(source);
         click(window, "采纳并替换选区");
+        answerReplacement("确认替换", true);
         require(editor->toPlainText() == prefix + polished + suffix &&
                     check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText(),
                 "多段润色没有准确替换最初选中的第二处原文");
@@ -519,7 +534,12 @@ data: {"type":"message_stop"}
                 "再次对比显示过期草稿");
         draftTabs->setCurrentWidget(chapterDraft);
         click(window, "覆盖本章");
-        require(editor->toPlainText() == "新开头\n新结尾。\nBLG 𠀀！" &&
+        answerReplacement("确认覆盖", false);
+        require(chapterDraft->isVisible() && check.value("SELECT body FROM chapters WHERE id=1") == originalChapter,
+                "取消整章覆盖时修改了正文或离开了候选稿");
+        click(window, "覆盖本章");
+        answerReplacement("确认覆盖", true);
+        require(editor->isVisible() && editor->toPlainText() == "新开头\n新结尾。\nBLG 𠀀！" &&
                     window.findChild<QLabel *>("chapterWordCount")->text() == "本章 10 字" &&
                     check.value("SELECT body FROM chapters WHERE id=1").toString() == editor->toPlainText() &&
                     check.value("SELECT body FROM revisions WHERE chapter=1 ORDER BY id DESC LIMIT 1") == originalChapter,
