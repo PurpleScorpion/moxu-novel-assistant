@@ -33,9 +33,14 @@ class Dossier : public QWidget
     QComboBox *from = new DownwardCombo, *to = new DownwardCombo;
     QLineEdit *relation = new QLineEdit;
     QListWidget *edges = new QListWidget;
+    QWidget *relationListPage = new QWidget;
+    QStackedWidget *relationActions = new QStackedWidget;
+    QLabel *deletePrompt = new QLabel;
     QStackedWidget *relationViews = new QStackedWidget;
     QPushButton *graphToggle = new QPushButton("查看关系图");
     QPushButton *saveRelation;
+    QPushButton *deleteRelation;
+    enum RelationRole { RelationId = Qt::UserRole, FromPerson, ToPerson, RelationLabel };
     int selected = 0;
     QList<NoteEditor *> notePages;
     QString oldName, oldAttrs;
@@ -131,6 +136,34 @@ class Dossier : public QWidget
         if (people->currentRow() < 0)
             people->setCurrentItem(item);
     }
+    void loadRelation(QListWidgetItem *item)
+    {
+        relationActions->setCurrentIndex(0);
+        from->setCurrentIndex(item ? from->findData(item->data(FromPerson)) : 0);
+        to->setCurrentIndex(item ? to->findData(item->data(ToPerson)) : qMin(1, to->count() - 1));
+        relation->setText(item ? item->data(RelationLabel).toString() : QString());
+        saveRelation->setText(item ? "保存修改" : "保存关系");
+        deleteRelation->setEnabled(item != nullptr);
+    }
+    void refreshRelations(qint64 selectId = 0)
+    {
+        QSignalBlocker block(edges);
+        edges->clear();
+        auto q = book->run("SELECT r.id,r.a,r.b,r.label,p.name,t.name FROM relations r JOIN people p ON p.id=r.a "
+                           "JOIN people t ON t.id=r.b ORDER BY r.id");
+        while (q.next())
+        {
+            auto *item = new QListWidgetItem(q.value(4).toString() + "   ── " + q.value(3).toString() + " ─→   " +
+                                                 q.value(5).toString(), edges);
+            item->setData(RelationId, q.value(0));
+            item->setData(FromPerson, q.value(1));
+            item->setData(ToPerson, q.value(2));
+            item->setData(RelationLabel, q.value(3));
+            if (q.value(0).toLongLong() == selectId)
+                edges->setCurrentItem(item);
+        }
+        loadRelation(edges->currentItem());
+    }
     void refreshPage(int page)
     {
         QScopedValueRollback guard(loading, true);
@@ -158,23 +191,15 @@ class Dossier : public QWidget
         else if (page == 2)
         {
             closeRelationGraph();
-            edges->clear();
             from->clear();
             to->clear();
-            relation->clear();
             auto p = book->run("SELECT id,name FROM people ORDER BY id");
             while (p.next())
             {
                 from->addItem(p.value(1).toString(), p.value(0));
                 to->addItem(p.value(1).toString(), p.value(0));
             }
-            if (to->count() > 1)
-                to->setCurrentIndex(1);
-            auto q = book->run("SELECT p.name,r.label,t.name FROM relations r JOIN people p ON p.id=r.a JOIN people t "
-                               "ON t.id=r.b ORDER BY r.id");
-            while (q.next())
-                edges->addItem(q.value(0).toString() + "   ── " + q.value(1).toString() + " ─→   " +
-                               q.value(2).toString());
+            refreshRelations();
         }
         else if (page == 3)
             ledger->load(*book, preferredSnapshotChapter);
@@ -203,7 +228,7 @@ class Dossier : public QWidget
         if (relationViews->count() < 2)
             return;
         auto *view = relationViews->widget(1);
-        relationViews->setCurrentWidget(edges);
+        relationViews->setCurrentWidget(relationListPage);
         relationViews->removeWidget(view);
         view->deleteLater();
         graphToggle->setText("查看关系图");
@@ -344,32 +369,93 @@ class Dossier : public QWidget
         relationHeader->addWidget(sectionLabel("关系列表"), 1);
         relationHeader->addWidget(graphToggle);
         connect(graphToggle, &QPushButton::clicked, this, [=, this] {
-            if (relationViews->currentWidget() == edges)
+            if (relationViews->currentWidget() == relationListPage)
                 safe(graph);
             else
                 closeRelationGraph();
         });
-        relationViews->addWidget(edges);
+        relationViews->addWidget(relationListPage);
         links->addWidget(relationViews, 1);
+        auto *relationList = new QVBoxLayout(relationListPage);
+        relationList->setContentsMargins(0, 0, 0, 0);
+        edges->setObjectName("relationList");
+        relationList->addWidget(edges, 1);
+        relationList->addWidget(relationActions);
+        auto *edit = new QWidget;
+        relationActions->addWidget(edit);
+        auto *editLayout = new QVBoxLayout(edit);
+        editLayout->setContentsMargins(0, 0, 0, 0);
         auto *line = new QHBoxLayout;
-        links->addLayout(line);
-        line->addWidget(from);
-        line->addWidget(relation);
-        relation->setPlaceholderText("关系，例如 师父");
-        line->addWidget(to);
-        saveRelation = btn("保存关系", line);
+        editLayout->addLayout(line);
+        line->addWidget(from, 1);
+        line->addWidget(relation, 2);
+        relation->setPlaceholderText("关系名称，例如 师徒");
+        line->addWidget(to, 1);
+        auto *actions = new QHBoxLayout;
+        editLayout->addLayout(actions);
+        auto *createRelation = btn("新建关系", actions);
+        deleteRelation = btn("删除关系", actions);
+        actions->addStretch();
+        saveRelation = btn("保存关系", actions);
+        saveRelation->setObjectName("primary");
+        connect(edges, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *item) {
+            loadRelation(item);
+            notice->clear();
+        });
+        connect(createRelation, &QPushButton::clicked, this, [this] {
+            edges->setCurrentRow(-1);
+            loadRelation(nullptr);
+            relation->setFocus();
+            notice->clear();
+        });
         connect(saveRelation, &QPushButton::clicked, this, [this] {
             safe([&] {
-                if (!from->currentData().isValid() || from->currentData() == to->currentData() ||
-                    relation->text().trimmed().isEmpty())
+                const auto label = relation->text().trimmed();
+                if (!from->currentData().isValid() || !to->currentData().isValid() ||
+                    from->currentData() == to->currentData() || label.isEmpty())
                 {
                     notice->setText("请选择两位不同的人物并填写关系");
                     return;
                 }
-                book->run("INSERT INTO relations(a,b,label) VALUES(?,?,?)",
-                          {from->currentData(), to->currentData(), relation->text().trimmed()});
-                refreshPage(2);
+                QVariantList values{from->currentData(), to->currentData(), label};
+                qint64 id;
+                if (auto *item = edges->currentItem())
+                {
+                    id = item->data(RelationId).toLongLong();
+                    values << id;
+                    book->run("UPDATE relations SET a=?,b=?,label=? WHERE id=?", values);
+                }
+                else
+                    id = book->run("INSERT INTO relations(a,b,label) VALUES(?,?,?)", values).lastInsertId().toLongLong();
+                refreshRelations(id);
                 notice->confirm("人物关系");
+            });
+        });
+        auto *confirmDelete = new QWidget;
+        relationActions->addWidget(confirmDelete);
+        auto *confirmation = new QHBoxLayout(confirmDelete);
+        confirmation->setContentsMargins(0, 0, 0, 0);
+        deletePrompt->setTextFormat(Qt::PlainText);
+        deletePrompt->setWordWrap(true);
+        confirmation->addWidget(deletePrompt, 1);
+        auto *cancel = btn("取消", confirmation);
+        auto *remove = btn("确认删除", confirmation);
+        connect(deleteRelation, &QPushButton::clicked, this, [this] {
+            if (auto *item = edges->currentItem())
+            {
+                deletePrompt->setText("删除这条关系？  " + item->text());
+                relationActions->setCurrentIndex(1);
+            }
+        });
+        connect(cancel, &QPushButton::clicked, this, [this] { relationActions->setCurrentIndex(0); });
+        connect(remove, &QPushButton::clicked, this, [this] {
+            safe([&] {
+                if (auto *item = edges->currentItem())
+                {
+                    book->run("DELETE FROM relations WHERE id=?", {item->data(RelationId)});
+                    refreshRelations();
+                    notice->setText("已删除人物关系");
+                }
             });
         });
         auto *log = section("事件账本");
@@ -457,7 +543,7 @@ class Dossier : public QWidget
             notePages.at(page - 4)->saveNow();
         else if (page == plotIndex)
             plots->saveNow();
-        else if (page == 2)
+        else if (page == 2 && saveRelation->isVisible())
             saveRelation->click();
         else if (page == 0 || page == 1)
             safe([&] {

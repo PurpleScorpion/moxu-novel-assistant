@@ -472,10 +472,51 @@ int main(int argc, char **argv)
         window.findChild<QListWidget *>("personList")->setCurrentRow(1);
         check(tableRow(items, "盘古幡") == QStringList{"盘古幡"} && tableRow(skills, "上清仙法").isEmpty(),
               "快照串用人物");
+        auto originalRelation = verify.run("INSERT INTO relations(a,b,label) VALUES(1,2,'师傅')").lastInsertId();
         nav->setCurrentRow(2);
+        auto *relations = window.findChild<QListWidget *>("relationList");
+        relations->setCurrentRow(0);
+        auto *label = visible<QLineEdit>(window).first();
+        check(label->text() == "师傅", "旧关系未载入编辑栏");
+        label->setText("师徒");
+        auto pair = visible<QComboBox>(window);
+        pair[0]->setCurrentIndex(1);
+        click(window, "保存修改");
+        check(verify.value("SELECT label FROM relations WHERE id=?", {originalRelation}).toString() == "师傅",
+              "相同人物的无效关系覆盖了旧记录");
+        pair[1]->setCurrentIndex(0);
+        click(window, "保存修改");
+        check(verify.value("SELECT count(*) FROM relations WHERE id=? AND a=2 AND b=1 AND label='师徒'",
+                           {originalRelation}).toInt() == 1 && relations->count() == 1, "修改关系未更新原记录");
+        click(window, "新建关系");
+        label->setText("同门");
+        click(window, "保存关系");
+        check(relations->count() == 2 && relations->currentItem()->text().contains("同门"), "无法继续创建关系");
         click(window, "查看关系图");
         check(nav->isVisible() && !visible<QGraphicsView>(window).isEmpty(), "资料关系图跳出了侧栏");
+        auto graphLabels = [&](QWidget &parent) {
+            QStringList labels;
+            for (auto *item : visible<QGraphicsView>(parent).first()->scene()->items())
+                if (auto *text = qgraphicsitem_cast<QGraphicsTextItem *>(item))
+                    labels << text->toPlainText();
+            return labels;
+        };
+        check(graphLabels(window).contains("师徒") && !graphLabels(window).contains("师傅"), "关系图还在显示旧名称");
         click(window, "返回关系列表");
+        click(window, "进入专注写作");
+        action("关系图");
+        action("返回资料工作区");
+        relations->setCurrentRow(0);
+        click(window, "删除关系");
+        click(window, "取消");
+        check(relations->count() == 2, "取消后关系仍被删除");
+        click(window, "删除关系");
+        click(window, "确认删除");
+        check(verify.value("SELECT count(*) FROM relations WHERE id=?", {originalRelation}).toInt() == 0 &&
+                  relations->count() == 1 && relations->item(0)->text().contains("同门"), "删除关系影响了其他记录");
+        click(window, "进入专注写作");
+        check(!graphLabels(sheet()).contains("师徒") && graphLabels(sheet()).contains("同门"), "写作关系图没有刷新");
+        action("返回资料工作区");
         nav->setCurrentRow(3);
         click(window, "记录事件");
         auto *which = ledgerChapterChoice(window);

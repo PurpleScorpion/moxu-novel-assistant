@@ -699,15 +699,21 @@ class Window : public QMainWindow
         QGraphicsView *view = new QGraphicsView;
         auto *ownedScene = new QGraphicsScene(view);
         view->setScene(ownedScene);
-        auto &scene = *ownedScene;
         view->setRenderHint(QPainter::Antialiasing);
+        view->setMinimumHeight(240);
         if (pages->currentWidget() == writer)
         {
             beginSheet("人物关系图");
+            view->setObjectName("writerRelationGraph");
             sheet->form->addWidget(view, 1);
         }
         else
             dossier->showRelationGraph(view);
+        drawRelations(*ownedScene);
+    }
+    void drawRelations(QGraphicsScene &scene)
+    {
+        scene.clear();
         auto q = book->run("SELECT id,name FROM people ORDER BY id");
         QVector<QPair<int, QString>> people;
         while (q.next())
@@ -739,7 +745,6 @@ class Window : public QMainWindow
                 scene.addRect(label->sceneBoundingRect().adjusted(-6, -2, 6, 2), QPen(Qt::NoPen), QColor("#254834"));
             bg->setZValue(1);
         }
-        view->setMinimumHeight(240);
     }
     void reviewHistoryCleanup()
     {
@@ -1114,6 +1119,9 @@ class Window : public QMainWindow
         });
         auto focusWriter = [this] {
             setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+            if (sheet)
+                if (auto *view = sheet->findChild<QGraphicsView *>("writerRelationGraph"))
+                    drawRelations(*view->scene());
             pages->setCurrentWidget(writer);
             tools->show();
             statusBar()->show();
