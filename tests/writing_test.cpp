@@ -285,6 +285,9 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"山门�
 data: {"type":"message_stop"}
 
 )";
+                if (request["messages"].toArray().last().toObject()["content"] == "测试截断")
+                    response = "data: {\"choices\":[{\"delta\":{\"content\":\"山\"},\"finish_reason\":\"length\"}]}\n\n"
+                               "data: [DONE]\n\n";
                 int cut = response.indexOf("山") + 1;
                 socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " +
                               QByteArray::number(response.size()) + "\r\nConnection: close\r\n\r\n" +
@@ -331,7 +334,9 @@ data: {"type":"message_stop"}
                     !wire.contains("山下"),
                 "Anthropic 测试接口、认证或外发范围错误");
         click(window, "发送给 AI");
-        require(waitStatus("候选正文已就绪") && visible<QPlainTextEdit>(window)->toPlainText() == "山门开了。",
+        auto *draft = window.findChild<QPlainTextEdit *>("candidateDraft");
+        auto *feedback = window.findChild<QPlainTextEdit *>("revisionFeedback");
+        require(waitStatus("候选正文已就绪") && draft->toPlainText() == "山门开了。",
                 "Anthropic 流式正文错误");
         const auto anthPayload = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
         require(anthPayload["model"] == "GLM-5.2" && anthPayload["max_tokens"].toInt() > 0 &&
@@ -339,6 +344,24 @@ data: {"type":"message_stop"}
                     anthPayload["messages"].toArray().size() == 1 &&
                     anthPayload["messages"].toArray().first().toObject()["role"] == "user",
                 "Anthropic 写作请求格式错误");
+        auto sentMessages = [&] {
+            return QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object()["messages"].toArray();
+        };
+        draft->setPlainText("作者手改的初稿");
+        feedback->setPlainText("天气按十一月中旬处理");
+        click(window, "发送修改意见");
+        require(waitStatus("第 1 轮修改已完成") && sentMessages().size() == 3 &&
+                    sentMessages()[1].toObject()["role"] == "assistant" &&
+                    sentMessages()[1].toObject()["content"] == "作者手改的初稿" &&
+                    sentMessages()[2].toObject()["content"] == "天气按十一月中旬处理",
+                "首次追改没有携带当前候选稿和修改意见");
+        feedback->setPlainText("观赛时长改成十一年");
+        click(window, "发送修改意见");
+        require(waitStatus("第 2 轮修改已完成") && sentMessages().size() == 5 &&
+                    sentMessages()[2].toObject()["content"] == "天气按十一月中旬处理" &&
+                    sentMessages()[3].toObject()["content"] == "山门开了。" &&
+                    sentMessages()[4].toObject()["content"] == "观赛时长改成十一年",
+                "再次追改丢失上下文");
         auto chooseGlm = [&](const QString &label, bool activate) {
             click(window, "AI 配置");
             auto *list = visible<QListWidget>(window);
@@ -365,6 +388,7 @@ data: {"type":"message_stop"}
         click(window, "测试连接");
         require(waitStatus("连接成功") && !wire.contains("少用副词") && !wire.contains("山下"),
                 "测试请求带入书稿或未成功");
+        visible<QTabWidget>(window)->setCurrentIndex(0);
         click(window, "发送给 AI");
         QDeadlineTimer timeout(5000);
         QPushButton *accept = nullptr;
@@ -387,10 +411,24 @@ data: {"type":"message_stop"}
                     !wire.contains("Authorization:"),
                 "大纲、选区或认证范围错误");
         require(editor->toPlainText() == "甲在山下。", "未采纳修改了正文");
+        feedback->setPlainText("保留结尾");
+        click(window, "发送修改意见");
+        require(waitStatus("第 1 轮修改已完成") && sentMessages().size() == 4 &&
+                    sentMessages()[0].toObject()["role"] == "system" &&
+                    sentMessages()[2].toObject()["content"] == "山门前" &&
+                    sentMessages()[3].toObject()["content"] == "保留结尾", "新任务未重置对话或通用接口追改错误");
+        feedback->setPlainText("测试截断");
+        click(window, "发送修改意见");
+        require(waitStatus("已保留上一版") && draft->toPlainText() == "山门前" &&
+                    feedback->toPlainText() == "测试截断", "超长修订稿覆盖了完整候选正文");
+        server.close();
+        feedback->setPlainText("再改一次");
+        click(window, "发送修改意见");
+        require(waitStatus("请求失败") && feedback->toPlainText() == "再改一次" && draft->toPlainText() == "山门前" &&
+                    !draft->isReadOnly() && accept->isEnabled(), "修改失败丢失上一版候选正文或修改意见");
         accept->click();
         Book check(path);
         require(check.value("SELECT body FROM chapters WHERE id=1").toString() == "甲在山门前。", "选区替换未保存");
-        server.close();
         openAssistant();
         click(window, "发送给 AI");
         QDeadlineTimer failureTimeout(5000);

@@ -26,6 +26,7 @@ class Window : public QMainWindow
     QPlainTextEdit *editor = new QPlainTextEdit;
     QLabel *heading = new QLabel;
     QLabel *chapterPosition = new QLabel;
+    QLabel *chapterLength = new QLabel("本章 0 字");
     SaveStatus *status = new SaveStatus;
     QHBoxLayout *writerColumns;
     WriterSheet *sheet = nullptr;
@@ -1042,7 +1043,21 @@ class Window : public QMainWindow
         heading->setWordWrap(true);
         chapterHeader->addLayout(titleBlock, 1);
         chapterPosition->setObjectName("hint");
-        titleBlock->addWidget(chapterPosition);
+        auto *chapterMeta = new QHBoxLayout;
+        titleBlock->addLayout(chapterMeta);
+        chapterMeta->addWidget(chapterPosition);
+        chapterLength->setObjectName("chapterWordCount");
+        chapterLength->setToolTip("每个汉字、字母和数字各计一字，空白、标点和符号不计。");
+        chapterMeta->addSpacing(10);
+        chapterMeta->addWidget(chapterLength);
+        chapterMeta->addStretch();
+        connect(editor->document(), &QTextDocument::contentsChanged, this, [this] {
+            qsizetype count = 0;
+            for (const auto ch : editor->toPlainText().toUcs4())
+                if (QChar::isLetterOrNumber(ch))
+                    ++count;
+            chapterLength->setText(QString("本章 %1 字").arg(count));
+        });
         titleBlock->addWidget(heading);
         button(chapterHeader, "改章名", [this] { renameChapter(); });
         auto *saveChapter = new QPushButton("保存");

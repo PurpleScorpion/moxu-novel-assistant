@@ -208,9 +208,18 @@ int main(int argc, char **argv)
     if (chapters == lists.end())
         return 3;
     editor->insertPlainText("林澈获得了300积分。");
+    auto *wordCount = window.findChild<QLabel *>("chapterWordCount");
+    if (!wordCount || wordCount->text() != "本章 10 字")
+        return 51;
     (*chapters)->setCurrentRow(1);
-    if (!editor->toPlainText().isEmpty())
+    if (!editor->toPlainText().isEmpty() || wordCount->text() != "本章 0 字")
         return 4;
+    editor->insertPlainText("𠀀 BLG！\nS16");
+    if (wordCount->text() != "本章 7 字")
+        return 52;
+    editor->undo();
+    if (wordCount->text() != "本章 0 字")
+        return 53;
     editor->insertPlainText("买下丹药。");
     QTest::qWait(2100);
     if (verify.value("SELECT body FROM chapters WHERE id=1").toString() != "林澈获得了300积分。" ||

@@ -6,7 +6,7 @@ struct ChatResponse
 {
     QByteArray buffer, event;
     QString text, error;
-    bool thinking = false, finished = false;
+    bool thinking = false, finished = false, truncated = false;
     bool messagesApi = false;
 
     QString read(const QByteArray &bytes, bool end = false)
@@ -77,6 +77,8 @@ struct ChatResponse
         if (messagesApi)
         {
             auto type = obj["type"].toString();
+            if (type == "message_delta" && obj["delta"].toObject()["stop_reason"] == "max_tokens")
+                truncated = true;
             if (type == "message_stop")
                 finished = true;
             else if (type == "content_block_start")
@@ -101,6 +103,8 @@ struct ChatResponse
         if (choices.isEmpty())
             return {};
         auto choice = choices.first().toObject(), delta = choice["delta"].toObject();
+        if (choice["finish_reason"] == "length")
+            truncated = true;
         if (!choice["finish_reason"].toString().isEmpty())
             finished = true;
         if (!delta["reasoning_content"].toString().isEmpty())

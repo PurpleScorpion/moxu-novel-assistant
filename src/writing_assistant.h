@@ -3,6 +3,7 @@
 #include "ai_sites.h"
 #include "chat_response.h"
 #include "writing_notes.h"
+#include <QScopeGuard>
 #include <QtNetwork>
 #include <QtWidgets>
 
@@ -23,6 +24,11 @@ class WritingAssistant : public QWidget
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
                    *result = new QPlainTextEdit;
     QTabWidget *tabs = new QTabWidget;
+    QPlainTextEdit *feedback = new QPlainTextEdit;
+    QPlainTextEdit *revisionLog = new QPlainTextEdit;
+    QPushButton *revise = new QPushButton("发送修改意见");
+    QJsonArray revisionHistory;
+    bool hasDraft = false, previewRevision = false;
     QPushButton *send = new QPushButton("发送给 AI"), *apply = new QPushButton, *stop = new QPushButton("取消请求");
     QLabel *status = new QLabel;
     QNetworkAccessManager network;
@@ -35,6 +41,25 @@ class WritingAssistant : public QWidget
             control->setEnabled(!busy);
         stop->setEnabled(busy);
         stop->setVisible(busy);
+    }
+    void updateActions()
+    {
+        const bool reviewing = tabs->currentWidget() == revisionLog;
+        const bool revision = hasDraft && previewRevision && !reviewing;
+        feedback->setVisible(revision);
+        feedback->setEnabled(!pending);
+        revise->setVisible(revision && !pending);
+        revise->setEnabled(!feedback->toPlainText().trimmed().isEmpty() && !result->toPlainText().trimmed().isEmpty());
+        send->setVisible(!revision && !reviewing && !pending);
+        apply->setVisible(hasDraft && !pending);
+        apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
+    }
+    QJsonArray revisionTurns() const
+    {
+        auto turns = revisionHistory;
+        turns.append(QJsonObject{{"role", "assistant"}, {"content", result->toPlainText()}});
+        turns.append(QJsonObject{{"role", "user"}, {"content", feedback->toPlainText().trimmed()}});
+        return turns;
     }
     const AiSite &site() const
     {
@@ -72,7 +97,8 @@ class WritingAssistant : public QWidget
     QPair<QString, QString> messages() const
     {
         QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文。若选用的写作规则冲突，优"
-                        "先遵循本书规则。";
+                        "先遵循本书规则。按作者给定的时间、地点和设定行文，核对年份和时间跨度。"
+                        "收到修改意见时，在上一版正文上修改，保留此前已确认的修正和无关段落，返回完整修订稿。";
         QStringList outlines;
         for (int group = 0; group < sources->topLevelItemCount(); ++group)
         {
@@ -104,8 +130,16 @@ class WritingAssistant : public QWidget
         for (QTreeWidgetItemIterator it(sources, QTreeWidgetItemIterator::Checked); *it; ++it)
             ++count;
         referenceCount->setText(QString("已选 %1 项").arg(count));
-        preview->setPlainText("目标地址  " + endpoint().toString() + "\n模型  " + model->currentText() +
-                              "\n\n写作规则\n" + rules + "\n\n" + input);
+        QString content = "目标地址  " + endpoint().toString() + "\n模型  " + model->currentText() +
+                          "\n\n写作规则\n" + rules + "\n\n" + input;
+        if (hasDraft && previewRevision && !pending)
+            for (auto turn : revisionTurns())
+            {
+                auto message = turn.toObject();
+                content += (message["role"] == "assistant" ? "\n\n候选正文\n" : "\n\n作者修改意见\n") +
+                           message["content"].toString();
+            }
+        preview->setPlainText(content);
     }
     void updateProgress()
     {
@@ -159,7 +193,7 @@ class WritingAssistant : public QWidget
             reason.replace(key->text(), "***");
         return QString("请求失败%1，%2").arg(code ? QString("（HTTP %1）").arg(code) : QString(), reason.left(260));
     }
-    void submit(bool probe = false)
+    void submit(bool probe = false, bool revision = false)
     {
         if (pending)
             return;
@@ -178,10 +212,14 @@ class WritingAssistant : public QWidget
             status->setText("请填写写作任务。");
             return;
         }
+        if (revision && (!hasDraft || feedback->toPlainText().trimmed().isEmpty() ||
+                         result->toPlainText().trimmed().isEmpty()))
+            return;
         QSettings settings;
         settings.setValue("writing/provider", site().id);
         settings.setValue("writing/model/" + site().id, model->currentText());
         QJsonArray turns;
+        const auto conversation = revision ? revisionTurns() : QJsonArray{};
         QJsonObject payload{{"model", model->currentText()}, {"stream", !probe}};
         if (probe)
             turns.append(QJsonObject{{"role", "user"}, {"content", "请只回复 OK。"}});
@@ -193,6 +231,8 @@ class WritingAssistant : public QWidget
             else
                 turns.append(QJsonObject{{"role", "system"}, {"content", rules}});
             turns.append(QJsonObject{{"role", "user"}, {"content", input}});
+            for (auto turn : conversation)
+                turns.append(turn);
         }
         payload["messages"] = turns;
         if (probe || site().messagesApi())
@@ -203,12 +243,12 @@ class WritingAssistant : public QWidget
         const auto token = key->text().trimmed();
         site().setHeaders(request, token);
         sessionKeys[site().credentialId()] = token;
-        bool canApply = probe && apply->isEnabled();
+        const auto previousDraft = result->toPlainText();
         if (!probe)
         {
-            result->clear();
             result->setReadOnly(true);
             tabs->setCurrentWidget(result);
+            result->clear();
         }
         apply->setEnabled(false);
         apply->hide();
@@ -221,6 +261,7 @@ class WritingAssistant : public QWidget
         phase = probe ? "正在测试站点和模型" : "正在连接 " + service->currentText();
         updateProgress();
         setBusy(true);
+        updateActions();
         progress.start(1000);
         deadline.start(probe ? 30000 : 180000);
         connect(reply, &QNetworkReply::requestSent, this, [this, probe] {
@@ -231,14 +272,20 @@ class WritingAssistant : public QWidget
             if (!probe && isStream(reply) && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200)
                 readStream(reply, false);
         });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, canApply] {
+        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, previousDraft, conversation] {
             progress.stop();
             deadline.stop();
             pending = nullptr;
             reply->deleteLater();
             setBusy(false);
-            apply->setEnabled(canApply);
-            apply->setVisible(canApply);
+            bool completed = false;
+            auto restoreEditor = qScopeGuard([&] {
+                if (!probe && !completed)
+                    result->setPlainText(previousDraft);
+                result->setReadOnly(!hasDraft);
+                updateActions();
+                updatePreview();
+            });
             int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             if (timedOut || reply->error() == QNetworkReply::TimeoutError)
             {
@@ -258,6 +305,7 @@ class WritingAssistant : public QWidget
             }
             QString text;
             bool reasoningOnly = false;
+            bool truncated = false;
             if (!probe && isStream(reply))
             {
                 readStream(reply, true);
@@ -268,6 +316,7 @@ class WritingAssistant : public QWidget
                     return;
                 }
                 text = response.text;
+                truncated = response.truncated;
             }
             else
             {
@@ -290,6 +339,7 @@ class WritingAssistant : public QWidget
                             thought = true;
                     }
                     const auto finish = obj["stop_reason"].toString();
+                    truncated = finish == "max_tokens";
                     reasoningOnly = probe && text.trimmed().isEmpty() && thought &&
                                     (finish == "max_tokens" || finish == "end_turn");
                 }
@@ -298,10 +348,16 @@ class WritingAssistant : public QWidget
                     const auto choice = choices.first().toObject();
                     const auto message = choice["message"].toObject();
                     const auto finish = choice["finish_reason"].toString();
+                    truncated = finish == "length";
                     text = message["content"].toString();
                     reasoningOnly = probe && text.trimmed().isEmpty() && (finish == "length" || finish == "stop") &&
                                     !message["reasoning_content"].toString().trimmed().isEmpty();
                 }
+            }
+            if (!conversation.isEmpty() && truncated)
+            {
+                status->setText("修订稿超出模型输出上限，已保留上一版。可缩短待修改段落后重试。");
+                return;
             }
             if (text.trimmed().isEmpty() && !reasoningOnly)
             {
@@ -318,11 +374,21 @@ class WritingAssistant : public QWidget
             }
             if (!isStream(reply))
                 result->setPlainText(text);
-            result->setReadOnly(false);
-            apply->setEnabled(true);
-            apply->show();
+            completed = true;
+            revisionHistory = conversation;
+            if (conversation.isEmpty())
+                revisionLog->clear();
+            else
+                revisionLog->appendPlainText(QString("第 %1 轮\n%2\n")
+                                                 .arg(conversation.size() / 2)
+                                                 .arg(conversation.last().toObject()["content"].toString()));
+            tabs->setTabVisible(tabs->indexOf(revisionLog), !conversation.isEmpty());
+            hasDraft = true;
+            previewRevision = true;
+            feedback->clear();
             tabs->setCurrentWidget(result);
-            status->setText("候选正文已就绪，可编辑后采纳。");
+            status->setText(revisionHistory.isEmpty() ? "候选正文已就绪，可提出修改意见或采纳。"
+                                                      : QString("第 %1 轮修改已完成。").arg(revisionHistory.size() / 2));
         });
     }
 
@@ -481,12 +547,21 @@ class WritingAssistant : public QWidget
         tabs->addTab(compose, "写作要求");
         tabs->addTab(preview, "发送预览");
         tabs->addTab(result, "候选正文");
+        result->setObjectName("candidateDraft");
+        revisionLog->setReadOnly(true);
+        tabs->setTabVisible(tabs->addTab(revisionLog, "修改记录"), false);
         preview->setReadOnly(true);
         result->setReadOnly(true);
         context->setFont(QFont("Microsoft YaHei UI", 12));
         result->setFont(context->font());
         for (auto *field : {task, context, preview, result})
             field->document()->setDocumentMargin(10);
+        feedback->setObjectName("revisionFeedback");
+        feedback->setPlaceholderText("给这一版提修改意见，例如：把观赛时长改成十一年，保留结尾。");
+        feedback->setAccessibleName("修改意见");
+        feedback->setFixedHeight(74);
+        workLayout->addWidget(feedback);
+        feedback->hide();
         auto *actions = new QHBoxLayout;
         workLayout->addLayout(actions);
         status->setTextFormat(Qt::PlainText);
@@ -496,6 +571,8 @@ class WritingAssistant : public QWidget
         actions->addWidget(status, 1);
         actions->addWidget(stop);
         actions->addWidget(send);
+        actions->addWidget(revise);
+        revise->hide();
         actions->addWidget(apply);
         stop->setEnabled(false);
         stop->hide();
@@ -524,6 +601,23 @@ class WritingAssistant : public QWidget
             connect(field, &QPlainTextEdit::textChanged, this, [this] { updatePreview(); });
         connect(sources, &QTreeWidget::itemChanged, this, [this] { updatePreview(); });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
+        connect(revise, &QPushButton::clicked, this, [this] { submit(false, true); });
+        connect(tabs, &QTabWidget::currentChanged, this, [this] {
+            if (tabs->currentWidget() != preview && tabs->currentWidget() != revisionLog)
+                previewRevision = tabs->currentWidget() == result;
+            updateActions();
+            if (tabs->currentWidget() == preview)
+                updatePreview();
+        });
+        connect(feedback, &QPlainTextEdit::textChanged, this, [this] {
+            updateActions();
+            if (tabs->currentWidget() == preview)
+                updatePreview();
+        });
+        connect(result, &QPlainTextEdit::textChanged, this, [this] {
+            if (hasDraft && !pending)
+                updateActions();
+        });
         connect(stop, &QPushButton::clicked, this, [this] {
             if (pending)
                 pending->abort();
