@@ -9,6 +9,7 @@
 #include "plot_page.h"
 #include "note_editor.h"
 #include "writing_assistant.h"
+#include "creation_studio.h"
 #include <functional>
 
 class Dossier : public QWidget
@@ -17,6 +18,8 @@ class Dossier : public QWidget
     QHash<QString, QString> &sessionKeys;
     QVBoxLayout *summaryLayout = nullptr;
     WritingAssistant *summaryWorkspace = nullptr;
+    CreationStudio *studio = nullptr;
+    QVBoxLayout *studioLayout;
     void closeSummaryWorkspace()
     {
         delete summaryWorkspace;
@@ -226,6 +229,14 @@ class Dossier : public QWidget
                 summaryLayout->addWidget(summaryWorkspace, 1);
             }
         }
+        else if (page == summaryIndex + 1)
+        {
+            if (!studio)
+            {
+                studio = new CreationStudio(sessionKeys, book);
+                studioLayout->addWidget(studio, 1);
+            }
+        }
         else
             notePages.at(page - 4)->enter(book);
     }
@@ -255,6 +266,8 @@ class Dossier : public QWidget
     }
     void resetBook()
     {
+        delete studio;
+        studio = nullptr;
         closeSummaryWorkspace();
         ledger->resetBook();
         catalogPage->resetBook();
@@ -276,6 +289,7 @@ class Dossier : public QWidget
         navigation->addItem("剧情大事");
         navigation->addItem("资源管理");
         navigation->addItem("剧情摘要");
+        navigation->addItem("创作台");
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
@@ -496,6 +510,7 @@ class Dossier : public QWidget
         section("剧情大事")->addWidget(plots, 1);
         section("资源管理")->addWidget(catalogPage, 1);
         summaryLayout = section("剧情摘要", false);
+        studioLayout = section("创作台", false);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;

@@ -86,8 +86,11 @@ class Window : public QMainWindow
                 previousFocus->setFocus();
             else
                 editor->setFocus();
+            if (!dirty && book->value("SELECT body FROM chapters WHERE id=?", {chapter}).toString() != editor->toPlainText())
+                loadChapter(chapter);
         };
-        auto accept = [this, start, end, original, sourceChapter = chapter, back](const QString &text, bool wholeChapter) {
+        const auto version = book->value("SELECT body_version FROM chapters WHERE id=?", {chapter}).toLongLong();
+        auto accept = [this, start, end, original, version, sourceChapter = chapter, back](const QString &text, bool wholeChapter) {
             if (chapter != sourceChapter || editor->toPlainText() != original)
             {
                 statusBar()->show();
@@ -95,8 +98,32 @@ class Window : public QMainWindow
                 return;
             }
             const auto newBody = wholeChapter ? text : original.left(start) + text + original.mid(end);
-            if (!guard([&] { book->atomic([&] { book->save(chapter, newBody, Book::SaveMode::Checkpoint); }); }))
+            auto *panel = static_cast<WritingAssistant *>(pages->currentWidget());
+            qint64 conflictVersion = -1;
+            QString reviewedBody;
+            if (!guard([&] { book->atomic([&] {
+                auto current = book->run("SELECT body_version,body FROM chapters WHERE id=?", {chapter});
+                if (!current.next()) throw std::runtime_error("本章已移除，候选正文可复制保存。");
+                const auto currentVersion = current.value(0).toLongLong();
+                const auto currentBody = current.value(1).toString();
+                if (currentVersion != version || currentBody != original)
+                {
+                    reviewedBody = currentBody;
+                    if (!wholeChapter || panel->reviewedVersion != currentVersion)
+                    {
+                        conflictVersion = currentVersion;
+                        return;
+                    }
+                }
+                book->save(chapter, newBody, Book::SaveMode::Checkpoint);
+            }); }))
                 return;
+            if (conflictVersion >= 0)
+            {
+                panel->showConflict(reviewedBody, conflictVersion);
+                return;
+            }
+            if (!reviewedBody.isNull()) editor->setPlainText(reviewedBody);
             QTextCursor target(editor->document());
             target.setPosition(wholeChapter ? 0 : start);
             target.setPosition(wholeChapter ? editor->document()->characterCount() - 1 : end, QTextCursor::KeepAnchor);
@@ -521,6 +548,36 @@ class Window : public QMainWindow
         });
         title->setFocus();
     }
+    void fromInspiration()
+    {
+        auto *page = new CreationStudio(sessionKeys, nullptr,
+            [this](const QString &name, const QString &story, const QList<StudioItem> &rows) {
+                QDir dir(QSettings().value("booksDir", defaultBooksPath()).toString());
+                QString filename = name;
+                filename.replace(QRegularExpression(R"rx([<>:"/\\|?*\x00-\x1f])rx"), "_");
+                const auto path = dir.filePath(filename + ".moxu");
+                if (QFileInfo::exists(path)) throw std::runtime_error("已有同名书籍，请返回编辑故事，更改书名。");
+                QTemporaryDir staging(dir.filePath(".moxu-XXXXXX"));
+                if (!staging.isValid()) throw std::runtime_error("无法在保存目录创建新书。");
+                const auto staged = staging.filePath("draft.moxu");
+                {
+                    Book draft(staged, name);
+                    applyStudioItems(draft, rows, true, story);
+                }
+                if (!QFile::rename(staged, path)) throw std::runtime_error("无法保存书籍，请检查文件名、重名或目录权限。");
+                auto *old = pages->currentWidget();
+                openBook(path);
+                pages->removeWidget(old);
+                old->deleteLater();
+            }, [this] {
+                auto *old = pages->currentWidget();
+                pages->setCurrentWidget(shelf);
+                pages->removeWidget(old);
+                old->deleteLater();
+            });
+        pages->addWidget(page);
+        pages->setCurrentWidget(page);
+    }
     void browseBooks()
     {
         auto *fields = shelfActions->begin("打开已有书籍");
@@ -938,6 +995,7 @@ class Window : public QMainWindow
         actions->parentWidget()->setFixedWidth(190);
         actions->addWidget(new MatrixBanner("墨序 · 书架"));
         button(actions, "新建书籍", [this] { newBook(); })->setObjectName("primary");
+        button(actions, "从灵感建书", [this] { fromInspiration(); });
         button(actions, "打开书籍…", [this] { browseBooks(); });
         actions->addStretch();
         button(actions, "设置保存目录", [this] { chooseStorage(); });
@@ -1190,6 +1248,11 @@ class Window : public QMainWindow
             });
         });
         auto focusWriter = [this] {
+            // Chapters created in the studio may have been appended since the editor was opened.
+            auto added = book->run("SELECT id,title FROM chapters ORDER BY position LIMIT -1 OFFSET ?", {chapters->count()});
+            while (added.next()) addChapterItem(added.value(0).toInt(), added.value(1).toString());
+            chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow()+1).arg(chapters->count()));
+            refreshChapterMoves();
             setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
             if (sheet)
                 if (auto *view = sheet->findChild<QGraphicsView *>("writerRelationGraph"))

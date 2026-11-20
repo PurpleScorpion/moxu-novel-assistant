@@ -26,8 +26,8 @@ class WritingSourceDelegate : public QStyledItemDelegate
 class WritingSources : public QListWidget
 {
   public:
-    enum Group { GlobalSkill, BookSkill, Outline, Full, Summary, GroupCount };
-    enum Role { Body = Qt::UserRole, ChapterId, GroupId, Available, ChapterOrder };
+    enum Group { GlobalSkill, BookSkill, Outline, Full, Summary, Tail, Snapshot, GroupCount };
+    enum Role { Body = Qt::UserRole, ChapterId, GroupId, Available, ChapterOrder, Recommendation };
     struct Section
     {
         QString name;
@@ -85,7 +85,7 @@ class WritingSources : public QListWidget
     }
     static QString preference(Group id)
     {
-        static const char *keys[] = {"globalSkill", "bookSkill", "outline", "full", "summary"};
+        static const char *keys[] = {"globalSkill", "bookSkill", "outline", "full", "summary", "tail", "snapshot"};
         return QStringLiteral("writing/materialGroups/") + keys[id];
     }
     void restoreGroups(bool expandFull)

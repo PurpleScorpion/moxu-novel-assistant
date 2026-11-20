@@ -53,6 +53,18 @@ struct ChatResponse
 
     bool truncated() const { return stopReason == "max_tokens" || stopReason == "length"; }
 
+    void readBufferedReply(const QByteArray &bytes, bool allowStream)
+    {
+        const auto body = QByteArrayView(bytes).trimmed();
+        if (allowStream && (body.startsWith("data:") || body.startsWith("event:")))
+        {
+            read(bytes, true);
+            if (error.isEmpty() && !finished) error = "生成中断，请重新发送。";
+        }
+        else
+            readJson(bytes);
+    }
+
     QString emptyReplyMessage(int outputLimit) const
     {
         if (truncated())
