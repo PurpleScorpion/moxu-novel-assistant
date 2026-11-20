@@ -998,13 +998,31 @@ class WritingAssistant : public QWidget
             check = new ChapterCheck(book,currentChapter,[this](const QString &input) { submit(Request::Check,input); });
             tabs->addTab(check,"检查本章");
             heading->setText("章后漏记检查");
+            library->hide();
+            tabs->setStyleSheet("QTabWidget::pane { background:transparent; border:none; }");
+            auto *connection = new QFrame;
+            connection->setObjectName("contentPanel");
+            auto *bar = new QHBoxLayout(connection);
+            bar->setContentsMargins(14, 9, 14, 9);
+            bar->setSpacing(10);
+            for (const auto &[label, widget] : QList<QPair<QString,QWidget *>>{{"服务",service},{"模型",model},{"密钥",key}})
+            {
+                auto *caption = new QLabel(label);
+                caption->setObjectName("mutedLabel");
+                bar->addWidget(caption);
+                bar->addWidget(widget, 1);
+            }
+            bar->addWidget(test);
+            layout->insertWidget(1,connection);
+            tabs->setCurrentWidget(check);
+            tabs->tabBar()->hide();
         }
-        if (summaryOnly || checkOnly)
+        else if (summaryOnly)
         {
             layout->setContentsMargins(0, 0, 0, 0);
-            heading->setVisible(checkOnly);
+            heading->hide();
             chapterTitle->hide();
-            close->setVisible(checkOnly);
+            close->hide();
             library->hide();
             top->insertWidget(0, new QLabel("服务"));
             top->insertWidget(1, service);
@@ -1012,7 +1030,7 @@ class WritingAssistant : public QWidget
             top->insertWidget(3, model, 1);
             top->insertWidget(4, key, 1);
             top->insertWidget(5, test);
-            tabs->setCurrentWidget(checkOnly ? static_cast<QWidget *>(check) : static_cast<QWidget *>(summaries));
+            tabs->setCurrentWidget(summaries);
             tabs->tabBar()->hide();
         }
     }

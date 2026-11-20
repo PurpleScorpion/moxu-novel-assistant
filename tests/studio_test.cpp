@@ -37,6 +37,7 @@ static bool message(QWidget &root, const QString &text)
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    applyTheme(app);
     QTemporaryDir dir;
     QCoreApplication::setOrganizationName("MoxuTests");
     QCoreApplication::setApplicationName("Studio");
@@ -230,7 +231,22 @@ int main(int argc, char **argv)
         review->item(1, 0)->setCheckState(Qt::Checked);
         click(w, "确认写入勾选项");
         require(message(w, "本次未写入") && baseline == db.value("SELECT count(*) FROM events").toInt(), "未回滚整批");
-        review->item(1, 6)->setText("-9");
+        review->setCurrentCell(1, 1);
+        auto *quoteEditor = shown<QPlainTextEdit>(w, "checkQuote");
+        require(quoteEditor->toPlainText() == spent && review->horizontalScrollBar()->maximum() == 0,
+                "原句详情或建议列表布局错误");
+        auto *modelBox = shown<QComboBox>(w, "aiModel");
+        QPushButton *backButton = nullptr;
+        for (auto *button : w.findChildren<QPushButton *>())
+            if (button->isVisible() && button->text() == "返回正文")
+                backButton = button;
+        require(backButton &&
+                    modelBox->mapTo(&w, QPoint()).y() > backButton->mapTo(&w, QPoint(0, backButton->height())).y(),
+                "模型控件挤入了标题行");
+        shown<QLineEdit>(w, "checkAmount")->setText("-9");
+        review->setCurrentCell(0, 1);
+        review->setCurrentCell(1, 1);
+        require(shown<QLineEdit>(w, "checkAmount")->text() == "-9", "切换建议后遗失修改");
         click(w, "确认写入勾选项");
         require(message(w, "已入账 2 条") && baseline + 2 == db.value("SELECT count(*) FROM events").toInt(),
                 "编辑后无法采纳");
@@ -268,6 +284,7 @@ int main(int argc, char **argv)
         db.save(testChapter, evidence);
         ChapterCheck audit(db, testChapter,
                            [&](const QString &input) { require(input.contains(evidence), "未读取正文"); });
+        audit.resize(690,680);
         audit.show();
         click(audit, "检查本章");
         auto entry = [](QString kind, QString name, QString quote) {
@@ -295,7 +312,15 @@ int main(int argc, char **argv)
             QJsonDocument(QJsonArray{acquire, give, receive, consume, share, learn, level, use, custody}).toJson());
         audit.review(records);
         auto *grid = shown<QTableWidget>(audit, QString());
-        static_cast<QComboBox *>(grid->cellWidget(8, 3))->setCurrentText("普通事件");
+        QApplication::processEvents();
+        auto *excerpt = shown<QPlainTextEdit>(audit,"checkQuote");
+        require(grid->horizontalScrollBar()->maximum() == 0 &&
+                    grid->mapTo(&audit, QPoint(0, grid->height())).y() < excerpt->mapTo(&audit, QPoint()).y(),
+                "窄窗口核对表与原文详情布局错误");
+        grid->setCurrentCell(8, 1);
+        auto *recipient = shown<QLineEdit>(audit, "checkRecipient");
+        shown<QComboBox>(audit, "checkKind")->setCurrentText("普通事件");
+        require(!recipient->isVisible(), "普通事件仍显示接收人");
         for (int r = 0; r < grid->rowCount(); ++r)
             grid->item(r, 0)->setCheckState(Qt::Checked);
         click(audit, "确认写入勾选项");
@@ -309,7 +334,7 @@ int main(int argc, char **argv)
                 "章后检查写入了错误的快照");
         click(audit, "检查本章");
         audit.review(records);
-        require(grid->item(8, 1)->text() == "账本已有匹配", "重新分析丢失了作者纠正的事件类型");
+        require(grid->item(8, 3)->toolTip() == "账本已有匹配", "重新分析丢失了作者纠正的事件类型");
 
         AiSite glm{"zai-messages", "GLM", "https://api.z.ai/api/anthropic", {"glm-5.3"}, "messages-bearer"};
         QJsonObject payload;

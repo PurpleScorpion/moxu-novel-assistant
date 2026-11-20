@@ -1,6 +1,7 @@
 #pragma once
 #include "book.h"
 #include "downward_combo.h"
+#include "interface.h"
 #include <QtWidgets>
 
 class ChapterCheck : public QWidget
@@ -14,37 +15,139 @@ class ChapterCheck : public QWidget
     QPushButton *scan = new QPushButton("检查本章"), *apply = new QPushButton("确认写入勾选项");
     const QStringList kinds{"数量变动",   "获得道具", "转交道具", "获得消耗品", "使用消耗品",
                             "赠送消耗品", "学会功法", "功法升级", "使用功法",   "普通事件"};
+    class EventDelegate : public QStyledItemDelegate
+    {
+      public:
+        using QStyledItemDelegate::QStyledItemDelegate;
+        void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+        {
+            auto opt = option;
+            initStyleOption(&opt, index);
+            const auto title = opt.text;
+            opt.text.clear();
+            auto *style = opt.widget ? opt.widget->style() : QApplication::style();
+            style->drawControl(QStyle::CE_ItemViewItem, &opt, p, opt.widget);
+            p->save();
+            const auto rect = opt.rect.adjusted(4, 2, -6, -2);
+            p->setClipRect(rect);
+            auto font = opt.font;
+            font.setWeight(QFont::DemiBold);
+            p->setFont(font);
+            p->setPen(QColor("#dcf0e2"));
+            const auto upper = rect.adjusted(0, 0, 0, -rect.height() / 2);
+            p->drawText(upper, Qt::AlignLeft | Qt::AlignBottom,
+                        QFontMetrics(font).elidedText(title, Qt::ElideRight, upper.width()));
+            font.setWeight(QFont::Normal);
+            if (font.pixelSize() > 0)
+                font.setPixelSize(qMax(12, font.pixelSize() - 1));
+            else
+                font.setPointSizeF(qMax(9.0, opt.font.pointSizeF() - 1));
+            p->setFont(font);
+            p->setPen(QColor("#a2b9aa"));
+            const auto lower = rect.adjusted(0, rect.height() / 2 + 2, 0, 0);
+            p->drawText(lower, Qt::AlignLeft | Qt::AlignTop, index.data(Qt::UserRole).toString());
+            p->restore();
+        }
+    };
     enum Column
     {
         Pick,
+        Event,
+        Actor,
         Result,
-        Evidence,
-        Kind,
-        Person,
-        Name,
-        Amount,
-        Recipient,
-        Level,
-        Cooldown,
-        Uses,
         Columns
     };
     struct Entry
     {
         QString kind, person, name, recipient, level, cooldown, quote, amount, uses;
     };
-    Entry row(int r) const
+    QList<Entry> entries;
+    QSplitter *panels = new QSplitter;
+    QScrollArea *detail = new QScrollArea;
+    QPlainTextEdit *quote = new QPlainTextEdit;
+    DownwardCombo *type = new DownwardCombo;
+    QFormLayout *fields = new QFormLayout;
+    QLabel *count = new QLabel, *verdict = new QLabel;
+    QLabel *empty = new QLabel("点击「检查本章」，查看本章可能漏记的事件。");
+    struct Field
     {
-        auto cell = [&](int c) { return table->item(r, c)->text().trimmed(); };
-        return {static_cast<QComboBox *>(table->cellWidget(r, Kind))->currentText(),
-                cell(Person),
-                cell(Name),
-                cell(Recipient),
-                cell(Level),
-                cell(Cooldown),
-                cell(Evidence),
-                cell(Amount),
-                cell(Uses)};
+        QString Entry::*member;
+        QLineEdit *editor;
+    };
+    QList<Field> editors;
+    bool loading = false;
+
+    void updateCount()
+    {
+        int checked = 0;
+        for (int r = 0; r < table->rowCount(); ++r)
+            if (table->item(r, Pick)->checkState() == Qt::Checked)
+                ++checked;
+        count->setText(QString("共 %1 条   ·   已选 %2 条").arg(entries.size()).arg(checked));
+        apply->setEnabled(checked > 0);
+    }
+    void adaptFields()
+    {
+        const int k = type->currentIndex();
+        for (const auto &[member, editor] : editors)
+        {
+            bool show = true;
+            if (member == &Entry::recipient)
+                show = k == 2 || k == 5;
+            if (member == &Entry::amount)
+                show = k == 0 || (k >= 3 && k <= 5);
+            if (member == &Entry::level || member == &Entry::cooldown)
+                show = k == 6 || k == 7;
+            if (member == &Entry::uses)
+                show = k == 6;
+            if (member == &Entry::name)
+                show = k != 9;
+            fields->setRowVisible(editor, show);
+        }
+    }
+    void showEntry(int r)
+    {
+        if (r < 0 || r >= entries.size())
+            return;
+        QScopedValueRollback guard(loading, true);
+        const auto &entry = entries.at(r);
+        type->setCurrentIndex(kinds.indexOf(entry.kind));
+        quote->setPlainText(entry.quote);
+        for (const auto &[member, editor] : editors)
+            editor->setText(entry.*member);
+        adaptFields();
+        verdict->setText(table->item(r, Result)->toolTip());
+        verdict->setVisible(table->item(r, Result)->text() == "需修正");
+        detail->verticalScrollBar()->setValue(0);
+    }
+    void edit(QString Entry::*member, const QString &value)
+    {
+        int r = table->currentRow();
+        if (loading || r < 0 || r >= entries.size())
+            return;
+        entries[r].*member = value.trimmed();
+        if (member == &Entry::kind)
+            adaptFields();
+        assess(r);
+    }
+    void addField(const QString &label, QString Entry::*member, const QString &name)
+    {
+        auto *line = new QLineEdit;
+        line->setObjectName(name);
+        line->setAccessibleName(label);
+        fields->addRow(label, line);
+        editors.append({member, line});
+        connect(line, &QLineEdit::textChanged, this, [this, member](const QString &s) { edit(member, s); });
+    }
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QWidget::resizeEvent(event);
+        const auto orientation = width() < 790 ? Qt::Vertical : Qt::Horizontal;
+        if (panels->orientation() != orientation)
+        {
+            panels->setOrientation(orientation);
+            panels->setSizes(orientation == Qt::Horizontal ? QList<int>{600, 450} : QList<int>{210, 290});
+        }
     }
     static void fail(const QString &text)
     {
@@ -162,7 +265,7 @@ class ChapterCheck : public QWidget
     }
     bool processRow(int r, bool commit)
     {
-        return process(row(r), table->item(r, Pick)->data(Qt::UserRole).toString(), commit);
+        return process(entries.at(r), table->item(r, Pick)->data(Qt::UserRole).toString(), commit);
     }
     void assess(int r)
     {
@@ -176,7 +279,28 @@ class ChapterCheck : public QWidget
         {
             status = QString::fromUtf8(e.what());
         }
-        table->item(r, Result)->setText(status);
+        const auto &e = entries.at(r);
+        const auto subject = e.name.isEmpty() || e.kind == "普通事件" ? e.quote.simplified() : e.name;
+        table->item(r, Event)->setText(subject);
+        QString subtitle = e.kind;
+        if ((e.kind == kinds[0] || (kinds.indexOf(e.kind) >= 3 && kinds.indexOf(e.kind) <= 5)) && !e.amount.isEmpty())
+            subtitle +=
+                "  ·  " +
+                (e.kind == kinds[0] && e.amount.toInt() > 0 && !e.amount.startsWith('+') ? "+" + e.amount : e.amount);
+        if ((e.kind == kinds[2] || e.kind == kinds[5]) && !e.recipient.isEmpty())
+            subtitle += "  →  " + e.recipient;
+        if ((e.kind == kinds[6] || e.kind == kinds[7]) && !e.level.isEmpty())
+            subtitle += "  ·  " + e.level;
+        table->item(r, Event)->setData(Qt::UserRole, subtitle);
+        table->item(r, Actor)->setText(e.person);
+        bool warning = status != "待确认" && status != "账本已有匹配";
+        table->item(r, Result)->setText(warning ? "需修正" : status == "待确认" ? status : QStringLiteral("已记录"));
+        table->item(r, Result)->setForeground(QColor(warning ? "#e8ba83" : status == "待确认" ? "#bcdfbd" : "#94aa9e"));
+        if (table->currentRow() == r)
+        {
+            verdict->setText(status);
+            verdict->setVisible(warning);
+        }
         table->item(r, Result)->setToolTip(status);
     }
 
@@ -195,25 +319,113 @@ class ChapterCheck : public QWidget
     ChapterCheck(Book &source, int id, std::function<void(QString)> request) : book(source), chapter(id)
     {
         auto *layout = new QVBoxLayout(this);
-        auto *intro = new QLabel(
-            "检查会向所选模型发送本章正文、人物姓名和资源名称。核对原句后，双击单元格可修正建议，再勾选需要入账的行。");
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(panels, 1);
+        panels->setChildrenCollapsible(false);
+        panels->setHandleWidth(12);
+        auto *listCard = new QFrame;
+        listCard->setObjectName("contentPanel");
+        auto *listLayout = new QVBoxLayout(listCard);
+        listLayout->setContentsMargins(16, 14, 16, 12);
+        listLayout->setSpacing(10);
+        panels->addWidget(listCard);
+        auto *head = new QHBoxLayout;
+        listLayout->addLayout(head);
+        head->addWidget(sectionLabel("事件建议"), 1);
+        head->addWidget(scan);
+        auto *intro = new QLabel("检查时将发送本章正文、人物姓名和资源名称。");
         intro->setWordWrap(true);
-        layout->addWidget(intro);
-        auto *actions = new QHBoxLayout;
-        layout->addLayout(actions);
-        actions->addWidget(scan);
-        actions->addStretch();
-        actions->addWidget(apply);
+        intro->setObjectName("mutedLabel");
+        listLayout->addWidget(intro);
+        empty->setAlignment(Qt::AlignCenter);
+        empty->setWordWrap(true);
+        empty->setObjectName("mutedLabel");
+        listLayout->addWidget(empty, 1);
         table->setColumnCount(Columns);
-        table->setHorizontalHeaderLabels({"采纳", "核对结果", "原文依据", "类型", "人物", "资源／道具／功法", "数量",
-                                          "接收人", "等级", "冷却", "可用次数"});
-        table->setColumnWidth(Pick, 50);
-        table->setColumnWidth(Evidence, 245);
-        table->setColumnWidth(Kind, 122);
-        layout->addWidget(table, 1);
+        table->setHorizontalHeaderLabels({"采纳", "建议事项", "人物", "核对"});
+        table->setFont(QFont("Microsoft YaHei UI", 11));
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setSelectionMode(QAbstractItemView::SingleSelection);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->verticalHeader()->hide();
+        table->verticalHeader()->setDefaultSectionSize(54);
+        table->setShowGrid(false);
+        table->setAlternatingRowColors(true);
+        table->setWordWrap(false);
+        auto *header = table->horizontalHeader();
+        header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        header->setSectionResizeMode(QHeaderView::Fixed);
+        header->setSectionResizeMode(Event, QHeaderView::Stretch);
+        table->setColumnWidth(Pick, 52);
+        table->setColumnWidth(Actor, 90);
+        table->setColumnWidth(Result, 74);
+        table->setItemDelegateForColumn(Event, new EventDelegate(table));
+        table->setStyleSheet(
+            "QTableWidget {background:#101e18; alternate-background-color:#14251d; border:none; padding:0;}"
+            "QTableWidget::item:selected {background:#284635; color:#e8f8ec;}"
+            "QHeaderView::section {background:#1a2e23; color:#a6c3af; padding:7px 3px;}");
+        listLayout->addWidget(table, 1);
+        table->hide();
         notice->setWordWrap(true);
         notice->setTextFormat(Qt::PlainText);
-        layout->addWidget(notice);
+        listLayout->addWidget(notice);
+        notice->hide();
+        auto *actions = new QHBoxLayout;
+        listLayout->addLayout(actions);
+        count->setObjectName("mutedLabel");
+        actions->addWidget(count, 1);
+        apply->setObjectName("primary");
+        actions->addWidget(apply);
+        updateCount();
+
+        detail->setWidgetResizable(true);
+        detail->setFrameShape(QFrame::NoFrame);
+        detail->setObjectName("formScroll");
+        panels->addWidget(detail);
+        auto *card = new QFrame;
+        card->setObjectName("contentPanel");
+        detail->setWidget(card);
+        auto *form = new QVBoxLayout(card);
+        form->setContentsMargins(18, 16, 18, 16);
+        form->setSpacing(10);
+        form->addWidget(sectionLabel("建议详情"));
+        auto *label = new QLabel("原文依据");
+        label->setObjectName("mutedLabel");
+        form->addWidget(label);
+        quote->setObjectName("checkQuote");
+        quote->setAccessibleName("原文依据");
+        quote->setMinimumHeight(82);
+        quote->setMaximumHeight(102);
+        quote->setStyleSheet("QPlainTextEdit { background:#0d1b15; border:0; border-left:3px solid #79b58b; "
+                             "border-radius:2px; padding:8px; }");
+        form->addWidget(quote);
+        form->addSpacing(4);
+        fields->setVerticalSpacing(8);
+        fields->setHorizontalSpacing(14);
+        fields->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        form->addLayout(fields);
+        type->setObjectName("checkKind");
+        type->addItems(kinds);
+        fields->addRow("事件类型", type);
+        addField("人物", &Entry::person, "checkPerson");
+        addField("资源名称", &Entry::name, "checkName");
+        addField("变动数量", &Entry::amount, "checkAmount");
+        addField("接收人", &Entry::recipient, "checkRecipient");
+        addField("等级", &Entry::level, "checkLevel");
+        addField("冷却时间", &Entry::cooldown, "checkCooldown");
+        addField("可用次数", &Entry::uses, "checkUses");
+        verdict->setWordWrap(true);
+        verdict->setTextFormat(Qt::PlainText);
+        verdict->setObjectName("mutedLabel");
+        form->addWidget(verdict);
+        form->addStretch();
+        detail->hide();
+        panels->setStretchFactor(0, 3);
+        panels->setStretchFactor(1, 2);
+        panels->setSizes({600, 450});
+        connect(type, &QComboBox::currentTextChanged, this, [this](const QString &s) { edit(&Entry::kind, s); });
+        connect(quote, &QPlainTextEdit::textChanged, this, [this] { edit(&Entry::quote, quote->toPlainText()); });
+        connect(table, &QTableWidget::currentCellChanged, this, [this](int r, int, int, int) { showEntry(r); });
         connect(scan, &QPushButton::clicked, this, [this, request] {
             try
             {
@@ -222,8 +434,14 @@ class ChapterCheck : public QWidget
                     fail("本章还没有正文。");
                 version = q.value(0).toLongLong();
                 body = q.value(1).toString();
+                entries.clear();
                 table->setRowCount(0);
-                notice->clear();
+                table->hide();
+                detail->hide();
+                empty->setText("检查结果将在这里显示。");
+                empty->show();
+                updateCount();
+                notice->hide();
                 QStringList people, names;
                 auto p = book.run("SELECT name FROM people ORDER BY name");
                 while (p.next())
@@ -234,14 +452,16 @@ class ChapterCheck : public QWidget
             }
             catch (const std::exception &e)
             {
+                notice->show();
                 notice->setText(QString::fromUtf8(e.what()));
             }
         });
         connect(table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
-            if (item->column() != Pick && item->column() != Result)
-                assess(item->row());
+            if (item->column() == Pick)
+                updateCount();
         });
         connect(apply, &QPushButton::clicked, this, [this] {
+            notice->show();
             int added = 0, skipped = 0, active = 0;
             try
             {
@@ -290,32 +510,38 @@ class ChapterCheck : public QWidget
                     fail("模型回复含无效条目，请重新检查。");
             QSignalBlocker block(table);
             table->setRowCount(0);
+            entries.clear();
             for (auto value : rows)
             {
                 const auto o = value.toObject();
+                auto field = [&](const char *key) { return o[key].toVariant().toString().trimmed(); };
+                Entry entry{field("kind"),     field("person"), field("name"),   field("recipient"), field("level"),
+                            field("cooldown"), field("quote"),  field("amount"), field("uses")};
+                entries.append(entry);
                 const int r = table->rowCount();
                 table->insertRow(r);
-                QStringList keys{"",       "",          "quote", "",         "person", "name",
-                                 "amount", "recipient", "level", "cooldown", "uses"};
                 for (int c = 0; c < Columns; ++c)
                 {
-                    auto *item = new QTableWidgetItem(o[keys[c]].toVariant().toString());
-                    if (c == Pick)
-                    {
-                        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
-                        item->setCheckState(Qt::Unchecked);
-                    }
-                    if (c == Result)
-                        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                    auto *item = new QTableWidgetItem;
+                    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
                     table->setItem(r, c, item);
                 }
-                auto *type = new DownwardCombo;
-                type->addItems(kinds);
-                type->setCurrentIndex(kinds.indexOf(o["kind"].toString()));
-                table->setCellWidget(r, Kind, type);
-                connect(type, &QComboBox::currentIndexChanged, this, [this, r] { assess(r); });
-                table->item(r, Pick)->setData(Qt::UserRole, signature(row(r)));
+                auto *pick = table->item(r, Pick);
+                pick->setFlags(pick->flags() | Qt::ItemIsUserCheckable);
+                pick->setCheckState(Qt::Unchecked);
+                pick->setData(Qt::UserRole, signature(entry));
                 assess(r);
+            }
+            updateCount();
+            const bool hasRows = !entries.isEmpty();
+            empty->setText("本次检查没有发现需要入账的事件。");
+            empty->setVisible(!hasRows);
+            table->setVisible(hasRows);
+            detail->setVisible(hasRows);
+            if (hasRows)
+            {
+                table->setCurrentCell(0, Event);
+                showEntry(0);
             }
             return rows.isEmpty() ? QStringLiteral("检查完成，模型没有提取到待核对事件。")
                                   : QString("请核对 %1 条建议。").arg(rows.size());
