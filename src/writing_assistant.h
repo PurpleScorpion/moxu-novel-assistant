@@ -364,7 +364,7 @@ class WritingAssistant : public QWidget
             else if (reply->bytesAvailable() > 0)
                 deadline.start(); // Some compatible sites return one JSON body instead of SSE.
         });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, summarizing, previousDraft, conversation] {
+        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, summarizing, previousDraft, conversation, outputLimit] {
             progress.stop();
             deadline.stop();
             pending = nullptr;
@@ -407,60 +407,38 @@ class WritingAssistant : public QWidget
                 status->setText(failure(reply, code, error));
                 return;
             }
-            QString text;
-            bool reasoningOnly = false;
-            bool truncated = false;
             if (!probe && isStream(reply))
             {
                 readStream(reply, true, summarizing);
-                if (!response.error.isEmpty() || !response.finished)
-                {
-                    status->setText(
-                        failure(reply, code, response.error.isEmpty() ? "生成中断，请重新发送。" : response.error));
-                    return;
-                }
-                text = response.text;
-                truncated = response.truncated;
+                if (response.error.isEmpty() && !response.finished)
+                    response.error = "生成中断，请重新发送。";
             }
             else
             {
-                auto obj = QJsonDocument::fromJson(reply->readAll()).object();
-                auto choices = obj.value("choices").toArray();
-                if (obj.contains("error"))
+                const auto bytes = reply->readAll();
+                const auto body = QByteArrayView(bytes).trimmed();
+                if (!probe && (body.startsWith("data:") || body.startsWith("event:")))
                 {
-                    status->setText(failure(reply, code, ChatResponse::errorMessage(obj)));
-                    return;
+                    // Some gateways forward SSE with an incorrect Content-Type.
+                    response.read(bytes, true);
+                    if (response.error.isEmpty() && !response.finished)
+                        response.error = "生成中断，请重新发送。";
                 }
-                if (site().messagesApi() && obj["type"] == "message")
-                {
-                    bool thought = false;
-                    for (auto part : obj["content"].toArray())
-                    {
-                        auto block = part.toObject();
-                        if (block["type"] == "text")
-                            text += block["text"].toString();
-                        else if (block["type"] == "thinking" || block["type"] == "redacted_thinking")
-                            thought = true;
-                    }
-                    const auto finish = obj["stop_reason"].toString();
-                    truncated = finish == "max_tokens";
-                    reasoningOnly = probe && text.trimmed().isEmpty() && thought &&
-                                    (finish == "max_tokens" || finish == "end_turn");
-                }
-                else if (!site().messagesApi() && !choices.isEmpty())
-                {
-                    const auto choice = choices.first().toObject();
-                    const auto message = choice["message"].toObject();
-                    const auto finish = choice["finish_reason"].toString();
-                    truncated = finish == "length";
-                    text = message["content"].toString();
-                    reasoningOnly = probe && text.trimmed().isEmpty() && (finish == "length" || finish == "stop") &&
-                                    !message["reasoning_content"].toString().trimmed().isEmpty();
-                }
+                else
+                    response.readJson(bytes);
             }
+            if (!response.error.isEmpty())
+            {
+                status->setText(failure(reply, code, response.error));
+                return;
+            }
+            const auto &text = response.text;
+            const bool truncated = response.truncated();
+            const bool reasoningOnly = probe && text.trimmed().isEmpty() && response.sawThinking &&
+                (truncated || response.stopReason == "end_turn" || response.stopReason == "stop");
             if (text.trimmed().isEmpty() && !reasoningOnly)
             {
-                status->setText("服务未返回正文，请核对模型名称及接口类型。");
+                status->setText(response.emptyReplyMessage(outputLimit));
                 return;
             }
             if (probe)

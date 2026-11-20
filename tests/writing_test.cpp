@@ -327,11 +327,19 @@ data: {"type":"message_stop"}
 
 )";
                 const auto lastInput = request["messages"].toArray().last().toObject()["content"].toString();
+                if (lastInput == "测试空稿上限")
+                    response = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"内部思考\"}}\n\n"
+                               "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n"
+                               "data: {\"type\":\"message_stop\"}\n\n";
+                if (lastInput == "测试分块正文")
+                    response = "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"山门前\"}]}}]}\n\n"
+                               "data: [DONE]\n\n";
                 if (lastInput == "测试截断" || lastInput.contains("修改本章全文，保留原意和情节"))
                     response = "data: {\"choices\":[{\"delta\":{\"content\":\"山\"},\"finish_reason\":\"length\"}]}\n\n"
                                "data: [DONE]\n\n";
                 int cut = response.indexOf("山") + 1;
-                socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " +
+                const QByteArray mime = lastInput == "测试分块正文" ? "application/json" : "text/event-stream";
+                socket->write("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nContent-Length: " +
                               QByteArray::number(response.size()) + "\r\nConnection: close\r\n\r\n" +
                               response.first(cut));
                 QTimer::singleShot(30, socket, [socket, rest = response.mid(cut)] {
@@ -409,6 +417,11 @@ data: {"type":"message_stop"}
         require(compression && compression->isChecked(), "修订上下文应默认压缩");
         const QString oldDraft = QStringLiteral("作者手改的初稿") + QString(2500, QChar(u'雪'));
         draft->setPlainText(oldDraft);
+        feedback->setPlainText("测试空稿上限");
+        click(window, "发送修改意见");
+        require(waitStatus("只收到思考内容，服务报告已达到生成长度上限（本次设置 8192 token）") &&
+                    draft->toPlainText() == oldDraft && feedback->toPlainText() == "测试空稿上限",
+                "空稿达到上限时应保留原稿和意见并解释原因");
         feedback->setPlainText("天气按十一月中旬处理");
         click(window, "发送修改意见");
         require(feedback->toPlainText().isEmpty(), "发送后旧意见仍留在输入框");
@@ -493,6 +506,10 @@ data: {"type":"message_stop"}
                     !wire.contains("Authorization:"),
                 "大纲、选区或认证范围错误");
         require(editor->toPlainText() == "甲在山下。", "未采纳修改了正文");
+        ChatResponse emptyJson;
+        emptyJson.readJson(R"({"choices":[{"finish_reason":"stop","message":{"content":null,"reasoning_content":"思考"}}]})");
+        require(emptyJson.emptyReplyMessage(8192).contains("只返回了思考内容（stop）") && !emptyJson.truncated(),
+                "仅思考的正常结束被误判为输出上限");
         feedback->setPlainText("保留结尾");
         click(window, "发送修改意见");
         require(waitStatus("第 1 轮修改已完成") && sentMessages().size() == 4 &&
@@ -518,6 +535,10 @@ data: {"type":"message_stop"}
         require(waitStatus("连续 5 分钟未收到") && draft->toPlainText() == "山门前" &&
                     feedback->toPlainText() == "等待无内容的连接", "心跳不应延长生成等待，超时应恢复修订现场");
         heartbeat.stop();
+        feedback->setPlainText("测试分块正文");
+        click(window, "发送修改意见");
+        require(waitStatus("第 2 轮修改已完成") && draft->toPlainText() == "山门前",
+                "兼容站点返回的分块正文或错误媒体类型未识别");
         compression->setChecked(true);
         feedback->setPlainText("测试截断");
         click(window, "发送修改意见");
