@@ -22,6 +22,7 @@ class WritingAssistant : public QWidget
     QLabel *referenceCount = new QLabel;
     QList<AiSite> sites;
     QTimer progress, deadline;
+    static constexpr int generationIdleMs = 5 * 60 * 1000;
     QElapsedTimer elapsed;
     QString phase;
     bool timedOut = false;
@@ -225,6 +226,8 @@ class WritingAssistant : public QWidget
     void readStream(QNetworkReply *reply, bool end, bool summarizing)
     {
         const auto added = response.read(reply->readAll(), end);
+        if (!end && (response.receivedThinking || !added.isEmpty()))
+            deadline.start();
         if (summarizing)
             phase = "正在生成剧情摘要";
         else if (!added.isEmpty())
@@ -234,7 +237,7 @@ class WritingAssistant : public QWidget
             tail.insertText(added);
             phase = "正在接收候选正文";
         }
-        else if (response.thinking && response.text.isEmpty())
+        else if (response.receivedThinking && response.text.isEmpty())
             phase = "模型正在思考";
         updateProgress();
     }
@@ -322,7 +325,7 @@ class WritingAssistant : public QWidget
             payload["max_tokens"] = outputLimit;
         QNetworkRequest request(endpoint());
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-        request.setTransferTimeout(60000);
+        request.setTransferTimeout(0); // The request timer below handles probes and model inactivity.
         const auto token = key->text().trimmed();
         site().setHeaders(request, token);
         sessionKeys[site().credentialId()] = token;
@@ -348,14 +351,18 @@ class WritingAssistant : public QWidget
         setBusy(true);
         updateActions();
         progress.start(1000);
-        deadline.start(probe ? 30000 : 180000);
+        deadline.start(probe ? 30000 : generationIdleMs);
         connect(reply, &QNetworkReply::requestSent, this, [this, probe] {
             phase = probe ? "测试请求已发送" : "已发送，等待模型输出";
             updateProgress();
         });
         connect(reply, &QIODevice::readyRead, this, [this, reply, probe, summarizing] {
-            if (!probe && isStream(reply) && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200)
+            if (probe || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200)
+                return;
+            if (isStream(reply))
                 readStream(reply, false, summarizing);
+            else if (reply->bytesAvailable() > 0)
+                deadline.start(); // Some compatible sites return one JSON body instead of SSE.
         });
         connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, summarizing, previousDraft, conversation] {
             progress.stop();
@@ -378,9 +385,15 @@ class WritingAssistant : public QWidget
                 updatePreview();
             });
             int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            if (timedOut || reply->error() == QNetworkReply::TimeoutError)
+            if (timedOut)
             {
-                status->setText("请求超时，请检查站点、网络或稍后重试。");
+                status->setText(probe ? "测试连接请求超时（30 秒）。"
+                                      : "请求超时：已连续 5 分钟未收到新的思考内容或正文。");
+                return;
+            }
+            if (reply->error() == QNetworkReply::TimeoutError)
+            {
+                status->setText("网络连接超时，请检查站点或网络后重试。");
                 return;
             }
             if (reply->error() == QNetworkReply::OperationCanceledError)
@@ -772,6 +785,7 @@ class WritingAssistant : public QWidget
         connect(key, &QLineEdit::textEdited, this,
                 [this] { sessionKeys[site().credentialId()] = key->text().trimmed(); });
         deadline.setSingleShot(true);
+        deadline.setTimerType(Qt::PreciseTimer);
         deadline.setParent(this);
         deadline.setObjectName("requestDeadline");
         connect(&deadline, &QTimer::timeout, this, [this] {

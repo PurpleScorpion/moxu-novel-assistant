@@ -6,11 +6,12 @@ struct ChatResponse
 {
     QByteArray buffer, event;
     QString text, error;
-    bool thinking = false, finished = false, truncated = false;
+    bool receivedThinking = false, finished = false, truncated = false;
     bool messagesApi = false;
 
     QString read(const QByteArray &bytes, bool end = false)
     {
+        receivedThinking = false;
         buffer += bytes;
         QString added;
         for (;;)
@@ -86,16 +87,16 @@ struct ChatResponse
                 auto block = obj["content_block"].toObject();
                 if (block["type"] == "text")
                     return block["text"].toString();
-                if (block["type"] == "thinking")
-                    thinking = true;
+                if (block["type"] == "thinking" && !block["thinking"].toString().isEmpty())
+                    receivedThinking = true;
             }
             else if (type == "content_block_delta")
             {
                 auto delta = obj["delta"].toObject();
                 if (delta["type"] == "text_delta")
                     return delta["text"].toString();
-                if (delta["type"] == "thinking_delta")
-                    thinking = true;
+                if (delta["type"] == "thinking_delta" && !delta["thinking"].toString().isEmpty())
+                    receivedThinking = true;
             }
             return {};
         }
@@ -108,7 +109,7 @@ struct ChatResponse
         if (!choice["finish_reason"].toString().isEmpty())
             finished = true;
         if (!delta["reasoning_content"].toString().isEmpty())
-            thinking = true;
+            receivedThinking = true;
         return delta["content"].toString();
     }
 };

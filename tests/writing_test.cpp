@@ -269,6 +269,8 @@ int main(int argc, char **argv)
         if (argc == 2)
             window.grab().save(QString::fromLocal8Bit(argv[1]));
         QByteArray wire;
+        bool holdStream = false;
+        QPointer<QTcpSocket> heldSocket;
         QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
             wire.clear();
             auto *socket = server.nextPendingConnection();
@@ -285,6 +287,12 @@ int main(int argc, char **argv)
                     return;
                 const auto request = QJsonDocument::fromJson(wire.mid(split + 4)).object();
                 const bool messages = wire.startsWith("POST /api/anthropic/v1/messages ");
+                if (std::exchange(holdStream, false))
+                {
+                    heldSocket = socket;
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
+                    return;
+                }
                 if (!request["stream"].toBool())
                 {
                     QByteArray response = R"({"choices":[{"message":{"content":"OK"}}]})";
@@ -367,7 +375,23 @@ data: {"type":"message_stop"}
                     wire.toLower().contains("anthropic-version: 2023-06-01") && !wire.contains("少用副词") &&
                     !wire.contains("山下"),
                 "Anthropic 测试接口、认证或外发范围错误");
+        holdStream = true;
         click(window, "发送给 AI");
+        auto *idleTimer = window.findChild<QTimer *>("requestDeadline");
+        require(idleTimer && idleTimer->isActive() && idleTimer->interval() == 300000 &&
+                    QTest::qWaitFor([&] { return !heldSocket.isNull(); }), "生成应使用五分钟空闲超时");
+        idleTimer->start(1200); // Exercise a stream spanning multiple idle windows without a five-minute test.
+        const QByteArray thought = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"思考\"}}\n\n";
+        const QByteArray body = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"山门开了。\"}}\n\n";
+        for (const auto &part : {thought, thought, body})
+        {
+            QTest::qWait(650);
+            heldSocket->write(part);
+            require(QTest::qWaitFor([&] { return idleTimer->remainingTime() > 900; }, 500),
+                    "连续的思考片段和正文都应重置空闲超时");
+        }
+        heldSocket->write("data: {\"type\":\"message_stop\"}\n\n");
+        heldSocket->disconnectFromHost();
         auto *draft = window.findChild<QPlainTextEdit *>("candidateDraft");
         auto *feedback = window.findChild<QPlainTextEdit *>("revisionFeedback");
         require(waitStatus("候选正文已就绪") && draft->toPlainText() == "山门开了。",
@@ -475,6 +499,25 @@ data: {"type":"message_stop"}
                     sentMessages()[0].toObject()["role"] == "system" &&
                     sentMessages()[2].toObject()["content"] == "山门前" &&
                     sentMessages()[3].toObject()["content"] == "保留结尾", "新任务未重置对话或通用接口追改错误");
+        heldSocket = nullptr;
+        holdStream = true;
+        feedback->setPlainText("等待无内容的连接");
+        click(window, "发送修改意见");
+        require(QTest::qWaitFor([&] { return !heldSocket.isNull(); }), "未收到模拟修订请求");
+        idleTimer->start(1200);
+        QTest::qWait(650);
+        heldSocket->write("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"继续思考\"}}]}\n\n");
+        require(QTest::qWaitFor([&] { return idleTimer->remainingTime() > 900; }, 500),
+                "通用接口的思考片段应重置计时");
+        QTimer heartbeat;
+        QObject::connect(&heartbeat, &QTimer::timeout, [&] {
+            if (heldSocket && heldSocket->state() == QAbstractSocket::ConnectedState)
+                heldSocket->write(": ping\n\ndata: {\"choices\":[{\"delta\":{}}]}\n\n");
+        });
+        heartbeat.start(80);
+        require(waitStatus("连续 5 分钟未收到") && draft->toPlainText() == "山门前" &&
+                    feedback->toPlainText() == "等待无内容的连接", "心跳不应延长生成等待，超时应恢复修订现场");
+        heartbeat.stop();
         compression->setChecked(true);
         feedback->setPlainText("测试截断");
         click(window, "发送修改意见");
