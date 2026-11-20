@@ -1,4 +1,5 @@
 #pragma once
+#include "token_estimate.h"
 #include "downward_combo.h"
 #include "chapter_diff.h"
 #include "chapter_summary.h"
@@ -27,7 +28,7 @@ class WritingAssistant : public QWidget
     WritingSources *sources = new WritingSources;
     QMap<int, QListWidgetItem *> fullEntries, summaryEntries;
     ChapterSummary *summaries = nullptr;
-    QString targetChapter;
+    QString targetChapter, originalBody;
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
                    *result = new QPlainTextEdit;
     QTabWidget *tabs = new QTabWidget;
@@ -121,7 +122,7 @@ class WritingAssistant : public QWidget
         service->setCurrentIndex(qMax(0, service->findData(isGlmSite(selected) ? glm : selected)));
         loadService();
     }
-    QPair<QString, QString> messages() const
+    QPair<QString, QString> messages(TokenEstimate *estimate = nullptr) const
     {
         QString rules = "你是中文小说写作助手。遵循作者的写作要求，只返回可直接使用的小说正文，勿附字数估算。若选用的写作规则冲突，优"
                         "先遵循本书规则。按作者给定的时间、地点和设定行文，核对年份和时间跨度。"
@@ -135,8 +136,10 @@ class WritingAssistant : public QWidget
                 if (item->checkState() != Qt::Checked)
                     continue;
                 auto group = WritingSources::groupOf(item);
+                const auto body = item->data(WritingSources::Body).toString();
+                if (estimate) estimate->add(section.name + " · " + item->text(), body);
                 QString part =
-                    "【" + section.name + " · " + item->text() + "】\n" + item->data(WritingSources::Body).toString();
+                    "【" + section.name + " · " + item->text() + "】\n" + body;
                 if (group == WritingSources::Full || group == WritingSources::Summary)
                     preceding.insert(item->data(WritingSources::ChapterOrder).toInt(), part);
                 else if (group == WritingSources::Outline)
@@ -155,8 +158,16 @@ class WritingAssistant : public QWidget
         }
         if (!outlines.isEmpty())
             input += "\n\n剧情参考\n" + outlines.join("\n\n");
-        if (!context->toPlainText().isEmpty())
-            input += "\n\n正文上下文\n" + context->toPlainText();
+        const auto excerpt = context->toPlainText();
+        if (!excerpt.isEmpty())
+            input += "\n\n正文上下文\n" + excerpt;
+        if (estimate)
+        {
+            estimate->add("写作任务", task->toPlainText());
+            if (!excerpt.isEmpty())
+                estimate->add((excerpt == originalBody ? "本章全文 · " : "正文上下文 · ") + targetChapter, excerpt);
+            estimate->addWeight("系统规则与资料标题", tokenWeight(rules) + tokenWeight(input) - estimate->weight);
+        }
         return {rules, input};
     }
     void updatePreview()
@@ -168,17 +179,26 @@ class WritingAssistant : public QWidget
         referenceCount->setText(QString("已选 %1 项").arg(count));
         if (tabs->currentWidget() != preview)
             return;
-        auto [rules, input] = messages();
-        QString content = "目标地址  " + endpoint().toString() + "\n模型  " + model->currentText() +
-                          "\n\n写作规则\n" + rules + "\n\n" + input;
+        TokenEstimate estimate;
+        auto [rules, input] = messages(&estimate);
+        QString transcript = "\n\n写作规则\n" + rules + "\n\n" + input;
         if (hasDraft && previewRevision && !pending)
             for (auto turn : revisionTurns())
             {
                 auto message = turn.toObject();
-                content += (message["role"] == "assistant" ? "\n\n候选正文\n" : "\n\n作者修改意见\n") +
-                           message["content"].toString();
+                const QString name = message["role"] == "assistant" ? "候选正文" : "作者修改意见";
+                const auto text = message["content"].toString();
+                estimate.add(name, text);
+                transcript += "\n\n" + name + "\n" + text;
             }
-        preview->setPlainText(content);
+        const auto selected = model->currentText();
+        const auto limit = site().outputLimit(selected);
+        QString tier = limit ? QLocale(QLocale::English).toString(limit) + " token" : QStringLiteral("由站点决定");
+        if (!site().outputLimits.value(selected).toInt()) tier = "默认档（" + tier + "）";
+        preview->setPlainText("模型　" + selected + "　|　当前输出档位　" + tier + "\n" + modelOutputGuide(selected) +
+            "\n\n本次输入约 " + QLocale(QLocale::English).toString((estimate.weight + 9) / 10) +
+            " token（按文本估算，实际以模型分词为准）\n" + estimate.rows.join('\n') +
+            "\n\n目标地址  " + endpoint().toString() + transcript);
     }
     void updateProgress()
     {
@@ -650,9 +670,9 @@ class WritingAssistant : public QWidget
             sources->scrollToItem(item);
         });
         contextHeader->addWidget(useChapter);
-        const auto chapterBody = book.value("SELECT body FROM chapters WHERE id=?", {currentChapter}).toString();
-        connect(useChapter, &QPushButton::clicked, this, [this, chapterBody, initialTask] {
-            context->setPlainText(chapterBody);
+        originalBody = book.value("SELECT body FROM chapters WHERE id=?", {currentChapter}).toString();
+        connect(useChapter, &QPushButton::clicked, this, [this, initialTask] {
+            context->setPlainText(originalBody);
             if (task->toPlainText() == initialTask)
                 task->setPlainText("修改本章全文，保留原意和情节，返回完整正文。");
         });
@@ -776,7 +796,7 @@ class WritingAssistant : public QWidget
         });
         connect(send, &QPushButton::clicked, this, [this] { submit(); });
         connect(revise, &QPushButton::clicked, this, [this] { submit(Request::Revise); });
-        connect(tabs, &QTabWidget::currentChanged, this, [this, chapterBody] {
+        connect(tabs, &QTabWidget::currentChanged, this, [this] {
             if (tabs->currentWidget() != summaries && !summaries->saveEdits())
             {
                 tabs->setCurrentWidget(summaries);
@@ -786,8 +806,8 @@ class WritingAssistant : public QWidget
             {
                 const auto draft = result->toPlainText();
                 comparison->setHtml(QString("<p><b>原文 %1 字　→　新稿 %2 字</b></p>")
-                                        .arg(chapterWordCount(chapterBody)).arg(chapterWordCount(draft)) +
-                                    ChapterDiff::render(chapterBody, draft));
+                                        .arg(chapterWordCount(originalBody)).arg(chapterWordCount(draft)) +
+                                    ChapterDiff::render(originalBody, draft));
                 comparison->verticalScrollBar()->setValue(0);
             }
             else if (tabs->currentWidget() != preview && tabs->currentWidget() != revisionLog)

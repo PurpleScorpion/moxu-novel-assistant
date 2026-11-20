@@ -22,6 +22,22 @@ inline QString activeGlmSite()
     return isGlmSite(id) ? id : QStringLiteral("zai-messages");
 }
 
+inline QString modelOutputGuide(const QString &model)
+{
+    const auto name = model.trimmed().toLower();
+    if (name.isEmpty()) return {};
+    QString maximum;
+    if (name == "glm-5.2" || name == "glm-5.3" || name == "glm-5-turbo")
+        maximum = "128K";
+    else if (name == "deepseek-flash" || name == "deepseek-v4-pro" || name == "deepseek-v4-flash")
+        maximum = "393,216（384K）";
+    if (maximum.isEmpty())
+        return "此型号的最大输出尚未核实，可先用默认档，并参考站点的模型说明。";
+    return QString("墨序建议：段落润色 4,096，整章重写先用 8,192，长章可试 16,384。\n"
+                   "%1 官方单次最大输出：%2 token。墨序手动最高档为 32,768；兼容站点可能另有限制。")
+        .arg(model, maximum);
+}
+
 struct AiSite
 {
     QString id, name, address;
@@ -173,6 +189,7 @@ class AiConfig : public QWidget
     QComboBox *limitModel = new DownwardCombo;
     QButtonGroup *limits = new QButtonGroup(this);
     QJsonObject editedLimits;
+    QLabel *modelGuide = new QLabel;
     QStringList modelNames() const
     {
         QStringList names;
@@ -185,6 +202,7 @@ class AiConfig : public QWidget
     }
     void showLimit()
     {
+        modelGuide->setText(modelOutputGuide(limitModel->currentText()));
         auto *fallback = limits->button(0);
         fallback->setText(protocol->currentData() == "chat" ? "默认（由站点决定）" : "默认（4,096）");
         auto *selected = limits->button(editedLimits.value(limitModel->currentText()).toInt());
@@ -410,6 +428,9 @@ class AiConfig : public QWidget
         form->addWidget(models, 1);
         auto *output = new QHBoxLayout;
         form->addLayout(output);
+        modelGuide->setWordWrap(true);
+        modelGuide->setTextFormat(Qt::PlainText);
+        form->addWidget(modelGuide);
         output->addWidget(new QLabel("设置输出上限的模型"));
         limitModel->setObjectName("limitModel");
         output->addWidget(limitModel, 1);

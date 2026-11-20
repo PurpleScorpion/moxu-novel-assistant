@@ -521,8 +521,23 @@ data: {"type":"message_stop"}
         editor->setTextCursor(middle);
         openAssistant();
         click(window, "使用本章全文");
+        auto *checkedSources = writingSources();
+        auto *plotA = checkedSources->addEntry(WritingSources::Outline, "视角", "山中");
+        auto *plotB = checkedSources->addEntry(WritingSources::Outline, "转折", "回到山门");
+        plotA->setCheckState(Qt::Checked);
+        plotB->setCheckState(Qt::Checked);
+        auto *previewTabs = visible<QTabWidget>(window);
+        previewTabs->setCurrentIndex(1);
+        const auto *budgetPreview = qobject_cast<QPlainTextEdit *>(previewTabs->currentWidget());
+        require(budgetPreview && budgetPreview->toPlainText().contains("视角　≈ 2 token") &&
+                    budgetPreview->toPlainText().contains("转折　≈ 3 token") &&
+                    budgetPreview->toPlainText().contains("本章全文 · 第 1 章") &&
+                    budgetPreview->toPlainText().contains("当前输出档位　16,384 token"), "发送预览的分项估算或输出档位错误");
+        plotB->setCheckState(Qt::Unchecked);
+        require(!budgetPreview->toPlainText().contains("转折　≈"), "取消勾选后仍计算了该大纲");
         click(window, "发送给 AI");
-        require(waitStatus("候选正文已就绪") && sentMessages().last().toObject()["content"].toString().contains(originalChapter),
+        require(waitStatus("候选正文已就绪") && !wire.contains("本次输入约") && !wire.contains("当前输出档位") &&
+                    sentMessages().last().toObject()["content"].toString().contains(originalChapter),
                 "整章改稿未发送完整上下文");
         auto *chapterDraft = qobject_cast<QPlainTextEdit *>(visible<QTabWidget>(window)->currentWidget());
         require(chapterDraft && chapterDraft->objectName() == "candidateDraft", "找不到整章候选稿");
@@ -641,6 +656,7 @@ data: {"type":"message_stop"}
         writingTabs->setCurrentIndex(1);
         auto *requestPreview = qobject_cast<QPlainTextEdit *>(writingTabs->currentWidget());
         require(requestPreview && requestPreview->toPlainText().contains(originalChapter) &&
+                    requestPreview->toPlainText().contains("前章全文 · 第 2 章 · 渡河　≈") &&
                     requestPreview->toPlainText().contains("她已将令牌交给渡船人。"), "预览中缺少选定章节");
         click(window, "测试连接");
         require(waitStatus("连接成功") && !wire.contains("令牌") && !wire.contains("章首"), "测试连接外发了前文章节");
