@@ -89,7 +89,14 @@ struct AiSite
     }
     QString credentialId() const
     {
-        return "Moxu/AI/" + id + "/" +
+        // Keep released builds on their original targets. Test apps use the same
+        // site presets but must never read or delete the author's credentials.
+        const auto org = QCoreApplication::organizationName();
+        const auto app = QCoreApplication::applicationName();
+        const QString prefix = org == "Moxu" && app == "Moxu" ? QStringLiteral("Moxu/AI/") :
+            QStringLiteral("Moxu/Isolated/") + QString::fromLatin1(QCryptographicHash::hash(
+                org.toUtf8() + '\0' + app.toUtf8(), QCryptographicHash::Sha256).toHex()) + "/AI/";
+        return prefix + id + "/" +
                QString::fromLatin1(
                    QCryptographicHash::hash(endpoint().toEncoded(), QCryptographicHash::Sha256).toHex());
     }
@@ -329,6 +336,8 @@ class AiConfig : public QWidget
         if (site.id.isEmpty())
             site.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         const auto credential = site.credentialId();
+        if (remember->isChecked() && key->text().trimmed().isEmpty())
+            throw std::runtime_error("请填写要记住的密钥，或取消勾选「在此电脑记住密钥」。");
         if (remember->isChecked() || !storedAiKey(credential).isEmpty())
             storeAiKey(credential, remember->isChecked() ? key->text().trimmed() : QString());
         QSettings settings;
@@ -365,7 +374,9 @@ class AiConfig : public QWidget
             list->item(row)->setText(site.name);
             load(row);
         }
-        notice->setText(activateGlm ? "已设为「智谱 GLM」的写作接口" : "站点和模型已保存");
+        const QString saved = activateGlm ? "已设为「智谱 GLM」的写作接口" : "站点和模型已保存";
+        notice->setText(saved + (remember->isChecked() ? "，密钥已保存在 Windows 凭据管理器。" :
+                                 key->text().trimmed().isEmpty() ? "。" : "，密钥仅在本次运行中使用。"));
     }
 
   public:

@@ -600,6 +600,7 @@ class WritingAssistant : public QWidget
         model->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         model->setMinimumContentsLength(10);
         key->setEchoMode(QLineEdit::Password);
+        key->setToolTip("在这里输入的密钥仅在本次运行中使用。要在更新后继续使用，请在 AI 配置中勾选记住密钥并保存。");
         test->setToolTip("仅发送简短测试消息，可能产生少量 API 用量。");
         connect(config, &QPushButton::clicked, this, [this, stack, home] {
             const auto current = site().id;

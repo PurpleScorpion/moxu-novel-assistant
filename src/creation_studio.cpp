@@ -33,6 +33,7 @@ CreationStudio::CreationStudio(QHash<QString, QString> &keys, Book *book, Create
     bar->addWidget(new QLabel("模型"));
     bar->addWidget(model, 1);
     key->setEchoMode(QLineEdit::Password);
+    key->setToolTip("在这里输入的密钥仅在本次运行中使用。要跨版本保留，请在 AI 配置中勾选记住密钥并保存。");
     key->setPlaceholderText("本站点 API 密钥");
     bar->addWidget(key, 1);
     root->addWidget(settings);
