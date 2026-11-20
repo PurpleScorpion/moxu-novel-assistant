@@ -381,22 +381,44 @@ data: {"type":"message_stop"}
         auto sentMessages = [&] {
             return QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object()["messages"].toArray();
         };
-        draft->setPlainText("作者手改的初稿");
+        auto *compression = window.findChild<QCheckBox *>("compressRevisionHistory");
+        require(compression && compression->isChecked(), "修订上下文应默认压缩");
+        const QString oldDraft = QStringLiteral("作者手改的初稿") + QString(2500, QChar(u'雪'));
+        draft->setPlainText(oldDraft);
         feedback->setPlainText("天气按十一月中旬处理");
         click(window, "发送修改意见");
         require(feedback->toPlainText().isEmpty(), "发送后旧意见仍留在输入框");
         require(waitStatus("第 1 轮修改已完成") && feedback->toPlainText().isEmpty() && sentMessages().size() == 3 &&
                     sentMessages()[1].toObject()["role"] == "assistant" &&
-                    sentMessages()[1].toObject()["content"] == "作者手改的初稿" &&
+                    sentMessages()[1].toObject()["content"] == oldDraft &&
                     sentMessages()[2].toObject()["content"] == "天气按十一月中旬处理",
                 "首次追改没有携带当前候选稿和修改意见");
-        feedback->setPlainText("观赛时长改成十一年");
+        const QString latest = "山门开了。\n作者手改了结尾。";
+        const QString opinion = "  观赛时长改成十一年\n保留结尾。  ";
+        draft->setPlainText(latest);
+        feedback->setPlainText(opinion);
+        auto *revisionTabs = visible<QTabWidget>(window);
+        revisionTabs->setCurrentIndex(1);
+        auto *revisionPreview = qobject_cast<QPlainTextEdit *>(revisionTabs->currentWidget());
+        require(revisionPreview && revisionPreview->toPlainText().contains("早期修订摘要　≈") &&
+                    revisionPreview->toPlainText().contains(latest) && !revisionPreview->toPlainText().contains(oldDraft),
+                "预览压缩或摘要用量错误");
+        compression->setChecked(false);
+        require(revisionPreview->toPlainText().contains(oldDraft), "关闭压缩后预览未恢复早期候选稿");
+        compression->setChecked(true);
         click(window, "发送修改意见");
-        require(waitStatus("第 2 轮修改已完成") && sentMessages().size() == 5 &&
-                    sentMessages()[2].toObject()["content"] == "天气按十一月中旬处理" &&
-                    sentMessages()[3].toObject()["content"] == "山门开了。" &&
-                    sentMessages()[4].toObject()["content"] == "观赛时长改成十一年",
-                "再次追改丢失上下文");
+        require(waitStatus("第 2 轮修改已完成") && sentMessages().size() == 3 &&
+                    sentMessages()[0].toObject()["content"].toString().contains("第 1 轮：天气按十一月中旬处理") &&
+                    !wire.contains(oldDraft.toUtf8()) && sentMessages()[1].toObject()["content"] == latest &&
+                    sentMessages()[2].toObject()["content"] == opinion,
+                "再次追改应发送早期摘要、手改候选稿和本轮意见");
+        compression->setChecked(false);
+        feedback->setPlainText("调整末句");
+        click(window, "发送修改意见");
+        require(waitStatus("第 3 轮修改已完成") && sentMessages().size() == 7 &&
+                    sentMessages()[1].toObject()["content"] == oldDraft &&
+                    sentMessages()[4].toObject()["content"] == opinion && !wire.contains("早期修订摘要"),
+                "关闭压缩后发送的完整历史有误");
         auto chooseGlm = [&](const QString &label, bool activate) {
             click(window, "AI 配置");
             auto *list = visible<QListWidget>(window);
@@ -453,10 +475,14 @@ data: {"type":"message_stop"}
                     sentMessages()[0].toObject()["role"] == "system" &&
                     sentMessages()[2].toObject()["content"] == "山门前" &&
                     sentMessages()[3].toObject()["content"] == "保留结尾", "新任务未重置对话或通用接口追改错误");
+        compression->setChecked(true);
         feedback->setPlainText("测试截断");
         click(window, "发送修改意见");
         require(waitStatus("候选正文可能没有写完") && draft->toPlainText() == "山" &&
-                    feedback->toPlainText().isEmpty(), "达到上限的修订稿未交给作者核对");
+                    feedback->toPlainText().isEmpty() && sentMessages().size() == 4 &&
+                    sentMessages()[1].toObject()["content"].toString().contains("第 1 轮：保留结尾"),
+                "通用接口修订压缩或截断提示错误");
+        compression->setChecked(false);
         draft->setPlainText("山门前");
         server.close();
         feedback->setPlainText("再改一次");
@@ -481,6 +507,9 @@ data: {"type":"message_stop"}
         reverse.setPosition(prefix.size(), QTextCursor::KeepAnchor);
         editor->setTextCursor(reverse);
         openAssistant();
+        auto *reopenedCompression = window.findChild<QCheckBox *>("compressRevisionHistory");
+        require(reopenedCompression && !reopenedCompression->isChecked(), "重新打开写作页丢失压缩设置");
+        reopenedCompression->setChecked(true);
         click(window, "发送给 AI");
         require(waitStatus("候选正文已就绪"), "选段润色未生成候选稿");
         auto selectedRequest = sentMessages().last().toObject()["content"].toString();

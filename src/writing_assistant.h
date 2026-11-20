@@ -1,5 +1,6 @@
 #pragma once
 #include "token_estimate.h"
+#include "revision_context.h"
 #include "downward_combo.h"
 #include "chapter_diff.h"
 #include "chapter_summary.h"
@@ -43,6 +44,7 @@ class WritingAssistant : public QWidget
     QPushButton *useChapter = new QPushButton("使用本章全文");
     QPushButton *usePrevious = new QPushButton("引用上一章");
     QJsonArray revisionHistory;
+    QCheckBox *compressHistory = new QCheckBox("自动压缩上下文");
     bool hasDraft = false, previewRevision = false, draftTruncated = false;
     QPushButton *send = new QPushButton("发送给 AI"), *apply = new QPushButton, *stop = new QPushButton("取消请求");
     QLabel *status = new QLabel;
@@ -52,7 +54,7 @@ class WritingAssistant : public QWidget
 
     void setBusy(bool busy)
     {
-        for (QWidget *control : QList<QWidget *>{service, model, key, config, test, task, context, sources, send})
+        for (QWidget *control : QList<QWidget *>{service, model, key, config, test, compressHistory, task, context, sources, send})
             control->setEnabled(!busy);
         stop->setEnabled(busy);
         stop->setVisible(busy);
@@ -86,7 +88,7 @@ class WritingAssistant : public QWidget
     {
         auto turns = revisionHistory;
         turns.append(QJsonObject{{"role", "assistant"}, {"content", result->toPlainText()}});
-        turns.append(QJsonObject{{"role", "user"}, {"content", feedback->toPlainText().trimmed()}});
+        turns.append(QJsonObject{{"role", "user"}, {"content", feedback->toPlainText()}});
         return turns;
     }
     const AiSite &site() const
@@ -183,14 +185,24 @@ class WritingAssistant : public QWidget
         auto [rules, input] = messages(&estimate);
         QString transcript = "\n\n写作规则\n" + rules + "\n\n" + input;
         if (hasDraft && previewRevision && !pending)
-            for (auto turn : revisionTurns())
+        {
+            const auto revision = RevisionContext::prepare(revisionTurns(), compressHistory->isChecked());
+            if (!revision.summary.isEmpty())
             {
-                auto message = turn.toObject();
-                const QString name = message["role"] == "assistant" ? "候选正文" : "作者修改意见";
+                transcript += revision.summary;
+                estimate.add("早期修订摘要", revision.summary);
+            }
+            for (qsizetype i = 0; i < revision.turns.size(); ++i)
+            {
+                auto message = revision.turns.at(i).toObject();
+                const bool current = i >= revision.turns.size() - 2;
+                const QString name = message["role"] == "assistant" ? (current ? "最新候选稿" : "历轮候选稿")
+                                                                    : (current ? "本轮修改意见" : "历轮修改意见");
                 const auto text = message["content"].toString();
                 estimate.add(name, text);
                 transcript += "\n\n" + name + "\n" + text;
             }
+        }
         const auto selected = model->currentText();
         const auto limit = site().outputLimit(selected);
         QString tier = limit ? QLocale(QLocale::English).toString(limit) + " token" : QStringLiteral("由站点决定");
@@ -299,8 +311,9 @@ class WritingAssistant : public QWidget
                 payload["system"] = rules;
             else
                 turns.append(QJsonObject{{"role", "system"}, {"content", rules}});
-            turns.append(QJsonObject{{"role", "user"}, {"content", input}});
-            for (auto turn : conversation)
+            const auto revisionContext = RevisionContext::prepare(conversation, compressHistory->isChecked());
+            turns.append(QJsonObject{{"role", "user"}, {"content", input + revisionContext.summary}});
+            for (auto turn : revisionContext.turns)
                 turns.append(turn);
         }
         payload["messages"] = turns;
@@ -568,6 +581,15 @@ class WritingAssistant : public QWidget
         fields->addRow("密钥", key);
         left->addLayout(fields);
         left->addWidget(test);
+        compressHistory->setObjectName("compressRevisionHistory");
+        compressHistory->setToolTip("连续修改时，将早期修订整理成摘要，完整发送最新候选稿和本轮意见。");
+        compressHistory->setChecked(QSettings().value("writing/compressRevisionHistory", true).toBool());
+        left->addWidget(compressHistory);
+        compressHistory->setVisible(!summaryOnly);
+        connect(compressHistory, &QCheckBox::toggled, this, [this](bool checked) {
+            QSettings().setValue("writing/compressRevisionHistory", checked);
+            updatePreview();
+        });
         left->addSpacing(6);
         auto *rule = new QFrame;
         rule->setObjectName("railRule");
