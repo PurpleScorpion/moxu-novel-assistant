@@ -140,6 +140,12 @@ int main(int argc, char **argv)
         require(QTest::qWaitFor([&] { return modelField->toPlainText() == "mock-1\nmock-2"; }, 3000),
                 "无法从兼容站点读取并合并模型");
         QObject::disconnect(catalogHandler);
+        auto *limitModel = window.findChild<QComboBox *>("limitModel");
+        auto *outputLimit = window.findChild<QButtonGroup *>("modelOutputLimits");
+        limitModel->setCurrentText("mock-2");
+        outputLimit->button(16384)->click();
+        limitModel->setCurrentText("mock-1");
+        require(outputLimit->checkedId() == 0, "一个模型的输出上限影响了另一个模型");
         click(window, "保存配置");
         require(window.findChild<QLabel *>("siteNotice")->text().contains("已保存"), "站点未保存");
         click(window, "新增站点");
@@ -165,6 +171,10 @@ int main(int argc, char **argv)
         auto renamed = siteList->findItems("智谱 GLM（ZCode 兼容）", Qt::MatchExactly);
         require(renamed.size() == 1, "旧版预设站点未显示新名称");
         siteList->setCurrentItem(renamed.first());
+        limitModel->setCurrentText("GLM-5.2");
+        require(outputLimit->checkedId() == 0 && outputLimit->checkedButton()->text().contains("4,096"),
+                "旧版兼容接口默认输出上限错误");
+        outputLimit->button(8192)->click();
         require(modelField->toPlainText().contains("自选模型"), "重命名丢失已保存的模型");
         require(protocol->currentData() == "messages-bearer" && address->text() == "https://api.z.ai/api/anthropic",
                 "ZCode 预设协议或地址错误");
@@ -172,6 +182,8 @@ int main(int argc, char **argv)
         siteKey->setText("local-only-test");
         click(window, "保存配置");
         siteList->setCurrentItem(siteList->findItems("本机兼容服务", Qt::MatchExactly).first());
+        limitModel->setCurrentText("mock-2");
+        require(outputLimit->checkedId() == 16384, "切换站点后原模型的输出上限未恢复");
         click(window, "返回");
         auto *recent = visible<QListWidget>(window);
         recent->setCurrentRow(0);
@@ -306,7 +318,8 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"山门�
 data: {"type":"message_stop"}
 
 )";
-                if (request["messages"].toArray().last().toObject()["content"] == "测试截断")
+                const auto lastInput = request["messages"].toArray().last().toObject()["content"].toString();
+                if (lastInput == "测试截断" || lastInput.contains("修改本章全文，保留原意和情节"))
                     response = "data: {\"choices\":[{\"delta\":{\"content\":\"山\"},\"finish_reason\":\"length\"}]}\n\n"
                                "data: [DONE]\n\n";
                 int cut = response.indexOf("山") + 1;
@@ -360,7 +373,7 @@ data: {"type":"message_stop"}
         require(waitStatus("候选正文已就绪") && draft->toPlainText() == "山门开了。",
                 "Anthropic 流式正文错误");
         const auto anthPayload = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
-        require(anthPayload["model"] == "GLM-5.2" && anthPayload["max_tokens"].toInt() > 0 &&
+        require(anthPayload["model"] == "GLM-5.2" && anthPayload["max_tokens"].toInt() == 8192 &&
                     anthPayload["system"].toString().contains("少用副词") &&
                     anthPayload["messages"].toArray().size() == 1 &&
                     anthPayload["messages"].toArray().first().toObject()["role"] == "user",
@@ -422,7 +435,8 @@ data: {"type":"message_stop"}
             QTest::qWait(20);
         require(accept->isEnabled(), "本机接口未返回结果");
         auto payload = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
-        require(payload["model"].toString() == "mock-2" && payload["stream"].toBool(), "选定模型或流式请求未生效");
+        require(payload["model"].toString() == "mock-2" && payload["stream"].toBool() &&
+                    payload["max_tokens"].toInt() == 16384, "选定模型、输出上限或流式请求未生效");
         auto turns = payload["messages"].toArray();
         auto rules = turns.first().toObject()["content"].toString(),
              input = turns.last().toObject()["content"].toString();
@@ -441,8 +455,9 @@ data: {"type":"message_stop"}
                     sentMessages()[3].toObject()["content"] == "保留结尾", "新任务未重置对话或通用接口追改错误");
         feedback->setPlainText("测试截断");
         click(window, "发送修改意见");
-        require(waitStatus("已保留上一版") && draft->toPlainText() == "山门前" &&
-                    feedback->toPlainText() == "测试截断", "超长修订稿覆盖了完整候选正文");
+        require(waitStatus("候选正文可能没有写完") && draft->toPlainText() == "山" &&
+                    feedback->toPlainText().isEmpty(), "达到上限的修订稿未交给作者核对");
+        draft->setPlainText("山门前");
         server.close();
         feedback->setPlainText("再改一次");
         click(window, "发送修改意见");
@@ -517,7 +532,7 @@ data: {"type":"message_stop"}
         QPushButton *overwrite = nullptr;
         for (auto *button : window.findChildren<QPushButton *>())
             if (button->isVisible() && button->text() == "覆盖本章") overwrite = button;
-        require(overwrite && overwrite->isEnabled(), "候选正文未直接提供覆盖本章");
+        require(overwrite && overwrite->isEnabled() && waitStatus("候选正文可能没有写完"), "达到上限的候选稿应提示并允许覆盖本章");
         require(diff && draftTabs->isTabVisible(draftTabs->indexOf(diff)), "本地对比标签未显示");
         draftTabs->setCurrentWidget(diff);
         require(diff->isReadOnly() && !overwrite->isVisible(), "整章对比应仅供查看");

@@ -37,6 +37,7 @@ class WritingAssistant : public QWidget
     QPushButton *applyChapter = new QPushButton("覆盖本章");
     QTextBrowser *comparison = new QTextBrowser;
     QLabel *draftLength = new QLabel;
+    QLabel *draftWarning = new QLabel("本次输出已达上限，候选正文可能没有写完。请核对结尾后再采纳。");
     bool wholeSelection;
     QPushButton *useChapter = new QPushButton("使用本章全文");
     QPushButton *usePrevious = new QPushButton("引用上一章");
@@ -74,7 +75,8 @@ class WritingAssistant : public QWidget
         apply->setEnabled(hasDraft && !pending && !result->toPlainText().trimmed().isEmpty());
         tabs->setTabVisible(tabs->indexOf(comparison), ready);
         applyChapter->setVisible(ready && candidatePage);
-        applyChapter->setEnabled(apply->isEnabled() && !draftTruncated);
+        applyChapter->setEnabled(apply->isEnabled());
+        draftWarning->setVisible(ready && candidatePage && draftTruncated);
         draftLength->setVisible(ready && (candidatePage || comparing));
         if (ready && (candidatePage || comparing))
             draftLength->setText(QString("候选稿 %1 字").arg(chapterWordCount(result->toPlainText())));
@@ -282,8 +284,9 @@ class WritingAssistant : public QWidget
                 turns.append(turn);
         }
         payload["messages"] = turns;
-        if (probe || site().messagesApi())
-            payload["max_tokens"] = probe ? 64 : 4096;
+        const int outputLimit = probe ? 64 : site().outputLimit(model->currentText());
+        if (outputLimit > 0)
+            payload["max_tokens"] = outputLimit;
         QNetworkRequest request(endpoint());
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setTransferTimeout(60000);
@@ -409,11 +412,6 @@ class WritingAssistant : public QWidget
                                     !message["reasoning_content"].toString().trimmed().isEmpty();
                 }
             }
-            if (!conversation.isEmpty() && truncated)
-            {
-                status->setText("修订稿超出模型输出上限，已保留上一版。可缩短待修改段落后重试。");
-                return;
-            }
             if (text.trimmed().isEmpty() && !reasoningOnly)
             {
                 status->setText("服务未返回正文，请核对模型名称及接口类型。");
@@ -455,8 +453,6 @@ class WritingAssistant : public QWidget
             tabs->setCurrentWidget(result);
             status->setText(revisionHistory.isEmpty() ? "候选正文已就绪，可提出修改意见或采纳。"
                                                       : QString("第 %1 轮修改已完成。").arg(revisionHistory.size() / 2));
-            if (truncated)
-                status->setText("模型达到输出上限，仅返回部分正文。请取得完整修订稿后再覆盖本章。");
         });
     }
 
@@ -698,6 +694,10 @@ class WritingAssistant : public QWidget
         for (auto *field : {task, context, preview, result})
             field->document()->setDocumentMargin(10);
         feedback->setObjectName("revisionFeedback");
+        draftWarning->setWordWrap(true);
+        draftWarning->setStyleSheet("color: #f0c879;");
+        workLayout->addWidget(draftWarning);
+        draftWarning->hide();
         feedback->setPlaceholderText("输入本轮修改意见…");
         feedback->setAccessibleName("修改意见");
         feedback->setFixedHeight(74);

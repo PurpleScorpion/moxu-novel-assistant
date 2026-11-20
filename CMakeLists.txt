@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Moxu VERSION 0.24.2 LANGUAGES CXX)
+project(Moxu VERSION 0.25.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Sql Network)

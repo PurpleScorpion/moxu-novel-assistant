@@ -27,6 +27,13 @@ struct AiSite
     QString id, name, address;
     QStringList models;
     QString protocol = "chat";
+    QJsonObject outputLimits;
+    int outputLimit(const QString &model) const
+    {
+        const int configured = outputLimits.value(model).toInt();
+        if (configured > 0) return configured;
+        return messagesApi() ? 4096 : 0;
+    }
     bool messagesApi() const
     {
         return protocol == "messages" || protocol == "messages-bearer";
@@ -106,6 +113,7 @@ inline QList<AiSite> aiSites()
         auto obj = QJsonDocument::fromJson(prefs.value(id).toByteArray()).object();
         AiSite site{id, obj["name"].toString(), obj["address"].toString(), obj["models"].toVariant().toStringList()};
         site.protocol = obj["protocol"].toString("chat");
+        site.outputLimits = obj["outputLimits"].toObject();
         auto it = std::find_if(sites.begin(), sites.end(), [&](const AiSite &s) { return s.id == id; });
         if (it == sites.end())
             sites.append(site);
@@ -162,6 +170,37 @@ class AiConfig : public QWidget
     QLineEdit *name = new QLineEdit, *address = new QLineEdit, *key = new QLineEdit;
     QPlainTextEdit *models = new QPlainTextEdit;
     QComboBox *protocol = new DownwardCombo;
+    QComboBox *limitModel = new DownwardCombo;
+    QButtonGroup *limits = new QButtonGroup(this);
+    QJsonObject editedLimits;
+    QStringList modelNames() const
+    {
+        QStringList names;
+        for (const auto &line : models->toPlainText().split('\n'))
+        {
+            const auto model = line.trimmed();
+            if (!model.isEmpty() && !names.contains(model)) names.append(model);
+        }
+        return names;
+    }
+    void showLimit()
+    {
+        auto *fallback = limits->button(0);
+        fallback->setText(protocol->currentData() == "chat" ? "默认（由站点决定）" : "默认（4,096）");
+        auto *selected = limits->button(editedLimits.value(limitModel->currentText()).toInt());
+        (selected ? selected : fallback)->setChecked(true);
+        for (auto *option : limits->buttons())
+            option->setEnabled(limitModel->currentIndex() >= 0);
+    }
+    void refreshLimitModels(const QString &preferred)
+    {
+        QSignalBlocker block(limitModel);
+        limitModel->clear();
+        limitModel->addItems(modelNames());
+        if (limitModel->count())
+            limitModel->setCurrentIndex(qMax(0, limitModel->findText(preferred)));
+        showLimit();
+    }
     QCheckBox *remember = new QCheckBox("在此电脑记住密钥（Windows 凭据管理器）");
     QLabel *notice = new QLabel;
     QPushButton *useGlm = new QPushButton("保存并设为写作接口");
@@ -246,7 +285,12 @@ class AiConfig : public QWidget
         name->setText(site.name);
         protocol->setCurrentIndex(qMax(0, protocol->findData(site.protocol)));
         address->setText(site.address);
-        models->setPlainText(site.models.join('\n'));
+        editedLimits = site.outputLimits;
+        {
+            QSignalBlocker blockModels(models);
+            models->setPlainText(site.models.join('\n'));
+        }
+        refreshLimitModels(QSettings().value("writing/model/" + id).toString());
         const auto boundCredential = site.id.isEmpty() ? QString() : site.credentialId();
         auto stored = boundCredential.isEmpty() ? QString() : storedAiKey(boundCredential);
         key->setText(keys.value(boundCredential, stored));
@@ -256,12 +300,10 @@ class AiConfig : public QWidget
     void save(bool activateGlm = false)
     {
         AiSite site{id, name->text().trimmed(), address->text().trimmed(), {}, protocol->currentData().toString()};
-        for (auto line : models->toPlainText().split('\n'))
-        {
-            line = line.trimmed();
-            if (!line.isEmpty() && !site.models.contains(line))
-                site.models.append(line);
-        }
+        site.models = modelNames();
+        for (const auto &model : site.models)
+            if (editedLimits.value(model).toInt() > 0)
+                site.outputLimits.insert(model, editedLimits.value(model));
         if (site.name.isEmpty() || site.models.isEmpty())
             throw std::runtime_error("请填写站点名称，并至少配置一个模型。");
         if (!site.validAddress())
@@ -278,6 +320,7 @@ class AiConfig : public QWidget
                           QJsonDocument(QJsonObject{{"name", site.name},
                                                     {"protocol", site.protocol},
                                                     {"address", site.address},
+                                                    {"outputLimits", site.outputLimits},
                                                     {"models", QJsonArray::fromStringList(site.models)}})
                               .toJson(QJsonDocument::Compact));
         settings.sync();
@@ -365,6 +408,46 @@ class AiConfig : public QWidget
         modelHeader->addWidget(fetch);
         connect(fetch, &QPushButton::clicked, this, [this] { fetchModels(); });
         form->addWidget(models, 1);
+        auto *output = new QHBoxLayout;
+        form->addLayout(output);
+        output->addWidget(new QLabel("设置输出上限的模型"));
+        limitModel->setObjectName("limitModel");
+        output->addWidget(limitModel, 1);
+        form->addWidget(new QLabel("最大输出 token（单选）"));
+        auto *choices = new QGridLayout;
+        form->addLayout(choices);
+        limits->setObjectName("modelOutputLimits");
+        const QList<QPair<int, QString>> presets{
+            {0, "沿用当前接口的默认设置。首次使用可选这一档。"},
+            {4096, "适合段落润色或短篇续写。重写较长章节时可能在结尾前停止。"},
+            {8192, "输出预算是上一档的两倍。整章重写在 4,096 档写到一半时，可先试这一档。"},
+            {16384, "适合较长章节。8,192 档仍触及上限时，为后半章留出更多输出空间。"},
+            {32768, "适合特别长的整章改写。先确认站点支持，实际生成较长回复时会更耗时。"}
+        };
+        for (const auto &[tokens, description] : presets)
+        {
+            auto *option = new QRadioButton(tokens ? QLocale(QLocale::English).toString(tokens) : QStringLiteral("默认"));
+            option->setStyleSheet("QRadioButton::indicator { width:14px; height:14px; border:2px solid #88ab97;"
+                                  " border-radius:9px; background:#102019; }"
+                                  "QRadioButton::indicator:checked { border-color:#9ce9b5; background:#74ce90; }");
+            limits->addButton(option, tokens);
+            const int row = limits->buttons().size() - 1;
+            choices->addWidget(option, row, 0);
+            auto *hint = new QLabel(description);
+            hint->setWordWrap(true);
+            choices->addWidget(hint, row, 1);
+        }
+        choices->setColumnStretch(1, 1);
+        auto *limitHelp = new QLabel("token 是模型处理文本的单位，与中文字数没有固定换算。档位只设一次回复的上限，模型可以提前结束。"
+                                     "调高档位不会扩大模型的上下文窗口。若站点提示超出允许范围，请调低一档。");
+        limitHelp->setWordWrap(true);
+        form->addWidget(limitHelp);
+        connect(models, &QPlainTextEdit::textChanged, this, [this] { refreshLimitModels(limitModel->currentText()); });
+        connect(limitModel, &QComboBox::currentIndexChanged, this, [this] { showLimit(); });
+        connect(limits, &QButtonGroup::idClicked, this, [this](int value) {
+            if (value > 0) editedLimits.insert(limitModel->currentText(), value);
+            else editedLimits.remove(limitModel->currentText());
+        });
         form->addWidget(new QLabel("API 密钥"));
         key->setEchoMode(QLineEdit::Password);
         form->addWidget(key);
@@ -381,6 +464,7 @@ class AiConfig : public QWidget
             list->addItem(site.name);
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) { load(row); });
         connect(protocol, &QComboBox::currentIndexChanged, this, [this] {
+            showLimit();
             cancelCatalog();
             key->clear();
             remember->setChecked(false);
