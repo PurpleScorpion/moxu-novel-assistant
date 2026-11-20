@@ -7,6 +7,7 @@
 #include "history_settings.h"
 #include "interface.h"
 #include "plot_page.h"
+#include "foreshadow.h"
 #include "note_editor.h"
 #include "writing_assistant.h"
 #include "creation_studio.h"
@@ -38,6 +39,7 @@ class Dossier : public QWidget
     std::function<void(QString)> renameBook;
     bool loading = false;
     EventLedger *ledger;
+    Foreshadows *clues = new Foreshadows;
     PlotPage *plots = new PlotPage;
     ResourceCatalog *catalogPage = new ResourceCatalog;
     CharacterSnapshot *snapshot = new CharacterSnapshot;
@@ -237,6 +239,7 @@ class Dossier : public QWidget
                 studioLayout->addWidget(studio, 1);
             }
         }
+        else if (page == clueIndex) clues->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
@@ -244,6 +247,7 @@ class Dossier : public QWidget
   public:
     static constexpr int plotIndex = 7;
     static constexpr int summaryIndex = plotIndex + 2;
+    static constexpr int clueIndex = summaryIndex + 2;
     int currentPage() const
     {
         return details->currentIndex();
@@ -273,7 +277,7 @@ class Dossier : public QWidget
         catalogPage->resetBook();
     }
     Dossier(QHash<QString, QString> &keys, std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
-            std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {})
+            std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {}, std::function<void(int,int,int)> jump = {})
         : sessionKeys(keys), renameBook(std::move(rename)), ledger(new EventLedger(appended))
     {
         auto *root = new QHBoxLayout(this);
@@ -290,6 +294,8 @@ class Dossier : public QWidget
         navigation->addItem("资源管理");
         navigation->addItem("剧情摘要");
         navigation->addItem("创作台");
+        navigation->addItem("伏笔");
+        clues->jump = std::move(jump);
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
         write->setObjectName("primary");
@@ -511,6 +517,7 @@ class Dossier : public QWidget
         section("资源管理")->addWidget(catalogPage, 1);
         summaryLayout = section("剧情摘要", false);
         studioLayout = section("创作台", false);
+        section("伏笔")->addWidget(clues,1);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
             if (!book || page < 0)
                 return;

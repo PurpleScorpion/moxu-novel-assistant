@@ -71,6 +71,7 @@ class Book
 {
     QString connection;
     QSqlDatabase db;
+    int transactionDepth = 0;
     QList<qint64> historiesToKeep(bool includeLegacy, HistoryLimits limits) const;
     void trimHistory(bool includeLegacy, const QList<qint64> &keep);
 

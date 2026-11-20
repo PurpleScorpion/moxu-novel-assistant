@@ -224,6 +224,7 @@ void CreationStudio::generate(bool core)
     else
         turns.append(QJsonObject{{"role", "system"}, {"content", rules}});
     turns.append(QJsonObject{{"role", "user"}, {"content", input}});
+    s.applyEffort(payload, model->currentText());
     payload["messages"] = turns;
     int limit = s.outputLimit(model->currentText());
     if (limit > 0)

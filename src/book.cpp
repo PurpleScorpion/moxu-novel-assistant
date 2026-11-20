@@ -47,15 +47,23 @@ QVariant Book::value(const QString &sql, const QVariantList &args) const
 }
 void Book::atomic(const std::function<void()> &operation)
 {
-    run("BEGIN IMMEDIATE");
+    const bool outer = transactionDepth == 0;
+    const QString point = "moxu_" + QString::number(transactionDepth);
+    run(outer ? QStringLiteral("BEGIN IMMEDIATE") : "SAVEPOINT " + point);
+    QScopedValueRollback depth(transactionDepth, transactionDepth + 1);
     try
     {
         operation();
-        run("COMMIT");
+        run(outer ? QStringLiteral("COMMIT") : "RELEASE " + point);
     }
     catch (...)
     {
-        db.rollback();
+        if (outer) db.rollback();
+        else
+        {
+            run("ROLLBACK TO " + point);
+            run("RELEASE " + point);
+        }
         throw;
     }
 }
@@ -175,6 +183,14 @@ Book::Book(const QString &path, const QString &newTitle)
             "FROM supplies s JOIN events e ON e.id=s.event_id UNION ALL "
             "SELECT s.name,e.id,e.chapter,s.recipient,-s.change FROM supplies s JOIN events e ON e.id=s.event_id "
             "WHERE s.recipient IS NOT NULL");
+        run("CREATE TABLE IF NOT EXISTS foreshadows(id INTEGER PRIMARY KEY,title TEXT NOT NULL,status TEXT NOT NULL,"
+            "expected INTEGER REFERENCES chapters(id), note TEXT NOT NULL DEFAULT '')");
+        run("CREATE TABLE IF NOT EXISTS clue_quotes(clue INTEGER NOT NULL REFERENCES foreshadows(id) ON DELETE CASCADE,"
+            "role TEXT NOT NULL,chapter INTEGER NOT NULL REFERENCES chapters(id),version INTEGER NOT NULL,"
+            "offset INTEGER NOT NULL,quote TEXT NOT NULL,PRIMARY KEY(clue,role))");
+        run("CREATE TABLE IF NOT EXISTS check_receipts(chapter INTEGER NOT NULL REFERENCES chapters(id),"
+            "signature TEXT NOT NULL,event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,"
+            "PRIMARY KEY(chapter,signature))");
         run("CREATE TABLE IF NOT EXISTS plot_steps(id INTEGER PRIMARY KEY,arc TEXT NOT NULL,strand TEXT NOT NULL,"
             "chapter INTEGER NOT NULL REFERENCES chapters,phase TEXT NOT NULL CHECK(phase IN ('开始','进展','结束')),"
             "note TEXT NOT NULL,anchor INTEGER NOT NULL)");

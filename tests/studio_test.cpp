@@ -11,7 +11,10 @@ template <class T> T *shown(QWidget &root, const QString &name)
     for (auto *w : root.findChildren<T *>(name))
         if (w->isVisible())
             return w;
-    throw std::runtime_error(("找不到可见控件：" + name).toStdString());
+    QStringList visibleButtons;
+    for (auto *b : root.findChildren<QPushButton *>()) if (b->isVisible()) visibleButtons << b->text();
+    throw std::runtime_error(("找不到可见控件：" + QString(T::staticMetaObject.className()) + " " + name +
+                              "；当前按钮 " + visibleButtons.join(" / ")).toStdString());
 }
 static void click(QWidget &root, const QString &name)
 {
@@ -201,6 +204,129 @@ int main(int argc, char **argv)
         require(db.value("SELECT body FROM chapters WHERE position=3") == answer &&
                     db.value("SELECT count(*) FROM revisions WHERE body='另一个编辑器保存的版本'").toInt() == 1,
                 "再次确认后未保存或未留存最新章节历史");
+        auto tool = [&](const QString &label) {
+            for (auto *a : w.findChildren<QAction *>())
+                if (a->text() == label) { a->trigger(); QApplication::processEvents(); return; }
+            throw std::runtime_error(label.toStdString());
+        };
+        auto *manuscript = shown<QPlainTextEdit>(w, "manuscript");
+        const QString earned = "玄都得了十块灵石。", spent = "玄都花去九块灵石。";
+        manuscript->setPlainText(earned + spent);
+        tool("检查本章");
+        const int beforeCheck = calls;
+        answer = QString::fromUtf8(QJsonDocument(QJsonArray{
+            QJsonObject{{"kind","数量变动"},{"person","玄都"},{"name","灵石"},{"amount",10},{"quote",earned}},
+            QJsonObject{{"kind","数量变动"},{"person","玄都"},{"name","灵石"},{"amount",-999},{"quote",spent}}
+        }).toJson());
+        require(calls == beforeCheck, "进入检查页自动发起了请求");
+        click(w, "检查本章");
+        require(QTest::qWaitFor([&] { return message(w, "请核对 2 条建议"); }) && sent.contains(earned) &&
+                    !sent.contains("前文开端标记"),
+                "未能从本章生成检查预览");
+        auto *review = shown<QTableWidget>(w, QString());
+        const int baseline = db.value("SELECT count(*) FROM events").toInt();
+        require(review->item(0, 0)->checkState() == Qt::Unchecked, "建议被默认采纳");
+        review->item(0, 0)->setCheckState(Qt::Checked);
+        review->item(1, 0)->setCheckState(Qt::Checked);
+        click(w, "确认写入勾选项");
+        require(message(w, "本次未写入") && baseline == db.value("SELECT count(*) FROM events").toInt(), "未回滚整批");
+        review->item(1, 6)->setText("-9");
+        click(w, "确认写入勾选项");
+        require(message(w, "已入账 2 条") && baseline + 2 == db.value("SELECT count(*) FROM events").toInt(),
+                "编辑后无法采纳");
+        review->item(0, 0)->setCheckState(Qt::Checked);
+        click(w, "确认写入勾选项");
+        require(message(w, "跳过已有 1 条"), "重复录入");
+        db.save(chapterId(3), earned + spent + "新增正文");
+        review->item(0, 0)->setCheckState(Qt::Checked);
+        click(w, "确认写入勾选项");
+        require(message(w, "正文已修改"), "章节版本失效后仍可入账");
+        click(w, "返回正文");
+        QTextCursor cur(manuscript->document());
+        cur.setPosition(earned.size(), QTextCursor::KeepAnchor);
+        manuscript->setTextCursor(cur);
+        tool("伏笔");
+        shown<QLineEdit>(w, QString())->setText("灵石来历");
+        click(w, "将选区标记为埋设");
+        const auto clue = db.value("SELECT id FROM foreshadows WHERE title='灵石来历'").toInt();
+        require(clue && db.value("SELECT quote FROM clue_quotes WHERE clue=?", {clue}) == earned, "未保留原始选区");
+        tool("返回资料工作区");
+        shown<QListWidget>(w, "navigation")->setCurrentRow(Dossier::clueIndex);
+        click(w, "埋设原文 · 第 3 章 · 下山 · 定位");
+        require(manuscript->isVisible() && manuscript->textCursor().selectedText() == earned, "伏笔未返回原句");
+        db.moveChapter(chapterId(3), -1);
+        require(
+            db.value("SELECT position FROM chapters JOIN clue_quotes ON chapters.id=chapter WHERE clue=?", {clue}) == 2,
+            "调序后原文指向其他章");
+        require(Clue::locate("前言" + earned, 2, 1, 0, earned) == 2 &&
+                    Clue::locate(earned + earned, 2, 1, 0, earned) == -1 && Clue::locate("改稿", 2, 1, 0, earned) == -1,
+                "失效摘录定位错误");
+
+        const int testChapter = chapterId(3);
+        const QString evidence = "玄都得到太极图。太极图赠予太清。玄都得到三瓶丹药。服用一瓶丹药。赠给太清一瓶丹药。"
+                                 "玄都习得清风诀。清风诀升至二层。施展一次清风诀。太清只是代持玉佩。";
+        db.save(testChapter, evidence);
+        ChapterCheck audit(db, testChapter,
+                           [&](const QString &input) { require(input.contains(evidence), "未读取正文"); });
+        audit.show();
+        click(audit, "检查本章");
+        auto entry = [](QString kind, QString name, QString quote) {
+            return QJsonObject{{"kind", kind}, {"person", "玄都"}, {"name", name}, {"quote", quote}};
+        };
+        auto acquire = entry("获得道具", "太极图", "玄都得到太极图。");
+        auto give = entry("转交道具", "太极图", "太极图赠予太清。");
+        give["recipient"] = "太清";
+        auto receive = entry("获得消耗品", "丹药", "玄都得到三瓶丹药。");
+        receive["amount"] = 3;
+        auto consume = entry("使用消耗品", "丹药", "服用一瓶丹药。");
+        consume["amount"] = 1;
+        auto share = entry("赠送消耗品", "丹药", "赠给太清一瓶丹药。");
+        share["amount"] = 1;
+        share["recipient"] = "太清";
+        auto learn = entry("学会功法", "清风诀", "玄都习得清风诀。");
+        learn["level"] = "一层";
+        learn["uses"] = 2;
+        auto level = entry("功法升级", "清风诀", "清风诀升至二层。");
+        level["level"] = "二层";
+        auto use = entry("使用功法", "清风诀", "施展一次清风诀。");
+        auto custody = entry("转交道具", "玉佩", "太清只是代持玉佩。");
+        custody["recipient"] = "太清";
+        auto records = QString::fromUtf8(
+            QJsonDocument(QJsonArray{acquire, give, receive, consume, share, learn, level, use, custody}).toJson());
+        audit.review(records);
+        auto *grid = shown<QTableWidget>(audit, QString());
+        static_cast<QComboBox *>(grid->cellWidget(8, 3))->setCurrentText("普通事件");
+        for (int r = 0; r < grid->rowCount(); ++r)
+            grid->item(r, 0)->setCheckState(Qt::Checked);
+        click(audit, "确认写入勾选项");
+        require(message(audit, "已入账 9 条"), "复核多类型事件未能写入");
+        const int master = db.value("SELECT id FROM people WHERE name='太清'").toInt();
+        require(db.ownedItems(master, testChapter) == QStringList{"太极图"} &&
+                    db.supplyCounts(person, testChapter).value("丹药") == 1 &&
+                    db.supplyCounts(master, testChapter).value("丹药") == 1 &&
+                    db.characterSkills(person, testChapter).first().remaining == 1 &&
+                    db.characterSkills(person, testChapter).first().level == "二层",
+                "章后检查写入了错误的快照");
+        click(audit, "检查本章");
+        audit.review(records);
+        require(grid->item(8, 1)->text() == "账本已有匹配", "重新分析丢失了作者纠正的事件类型");
+
+        AiSite glm{"zai-messages", "GLM", "https://api.z.ai/api/anthropic", {"glm-5.3"}, "messages-bearer"};
+        QJsonObject payload;
+        glm.applyEffort(payload, "glm-5.3");
+        require(payload.isEmpty(), "默认档改变了请求");
+        glm.efforts["glm-5.3"] = "low";
+        glm.applyEffort(payload, "glm-5.3");
+        require(payload["output_config"].toObject()["effort"] == "low" && !payload.contains("max_tokens"),
+                "Messages 强度参数错误");
+        glm.protocol = "chat";
+        payload = {};
+        glm.applyEffort(payload, "glm-5.3");
+        require(payload["reasoning_effort"] == "low" && !payload.contains("output_config"), "Chat 强度参数错误");
+        glm.address = "http://localhost:8080";
+        payload = {};
+        glm.applyEffort(payload, "glm-5.3");
+        require(payload.isEmpty(), "未知站点收到强度参数");
         return 0;
     }
     catch (const std::exception &e)

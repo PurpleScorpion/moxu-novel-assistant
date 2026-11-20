@@ -4,6 +4,7 @@
 #include "downward_combo.h"
 #include "chapter_diff.h"
 #include "chapter_summary.h"
+#include "chapter_check.h"
 #include "chapter_text.h"
 #include "ai_sites.h"
 #include "chat_response.h"
@@ -30,6 +31,7 @@ class WritingAssistant : public QWidget
     ChatResponse response;
     WritingSources *sources = new WritingSources;
     QMap<int, QListWidgetItem *> fullEntries, summaryEntries;
+    ChapterCheck *check = nullptr;
     ChapterSummary *summaries = nullptr;
     QString targetChapter, originalBody;
     QPlainTextEdit *task = new QPlainTextEdit, *context = new QPlainTextEdit, *preview = new QPlainTextEdit,
@@ -65,10 +67,11 @@ class WritingAssistant : public QWidget
         usePrevious->setEnabled(!busy);
         prepare->setEnabled(!busy);
         summaries->setEnabled(!busy);
+        if (check) check->setEnabled(!busy);
     }
     void updateActions()
     {
-        const bool reviewing = tabs->currentWidget() == revisionLog || tabs->currentWidget() == summaries;
+        const bool reviewing = tabs->currentWidget() == check || tabs->currentWidget() == revisionLog || tabs->currentWidget() == summaries;
         const bool comparing = tabs->currentWidget() == comparison;
         const bool candidatePage = tabs->currentWidget() == result;
         const bool ready = hasDraft && !pending;
@@ -272,7 +275,7 @@ class WritingAssistant : public QWidget
         const auto limit = site().outputLimit(selected);
         QString tier = limit ? QLocale(QLocale::English).toString(limit) + " token" : QStringLiteral("由站点决定");
         if (!site().outputLimits.value(selected).toInt()) tier = "默认档（" + tier + "）";
-        preview->setPlainText("模型　" + selected + "　|　当前输出档位　" + tier + "\n" + modelOutputGuide(selected) +
+        preview->setPlainText("模型　" + selected + "　|　当前输出档位　" + tier + "\nAI 思考强度　" + AiSite::effortLabel(site().effort(selected)) + "\n" + modelOutputGuide(selected) +
             "\n\n本次输入约 " + QLocale(QLocale::English).toString((estimate.weight + 9) / 10) +
             " token（按文本估算，实际以模型分词为准）\n" + estimate.rows.join('\n') +
             "\n\n目标地址  " + endpoint().toString() + transcript);
@@ -292,7 +295,9 @@ class WritingAssistant : public QWidget
         const auto added = response.read(reply->readAll(), end);
         if (!end && (response.receivedThinking || !added.isEmpty()))
             deadline.start();
-        if (summarizing)
+        if (check)
+            phase = "正在核对本章事件";
+        else if (summarizing)
             phase = "正在生成剧情摘要";
         else if (!added.isEmpty())
         {
@@ -333,12 +338,13 @@ class WritingAssistant : public QWidget
             reason.replace(key->text(), "***");
         return QString("请求失败%1，%2").arg(code ? QString("（HTTP %1）").arg(code) : QString(), reason.left(260));
     }
-    enum class Request { Write, Probe, Revise, Summary };
+    enum class Request { Write, Probe, Revise, Summary, Check };
     void submit(Request kind = Request::Write, const QString &summarySource = {})
     {
         const bool probe = kind == Request::Probe, revision = kind == Request::Revise;
         const bool summarizing = kind == Request::Summary;
-        const bool writing = !probe && !summarizing;
+        const bool checking = kind == Request::Check;
+        const bool writing = !probe && !summarizing && !checking;
         if (pending)
             return;
         if (model->currentText().isEmpty())
@@ -373,7 +379,7 @@ class WritingAssistant : public QWidget
                 ? qMakePair(QStringLiteral("为小说作者整理本章剧情摘要。用约 150 至 300 个中文字，记录已经发生的关键事件、"
                                            "人物关系与资源变化、未解线索以及章末状态。忠于正文，只返回摘要内容，章节标题由软件添加。"),
                             summarySource)
-                : messages();
+                : checking ? qMakePair(ChapterCheck::rules(), summarySource) : messages();
             if (site().messagesApi())
                 payload["system"] = rules;
             else
@@ -383,6 +389,7 @@ class WritingAssistant : public QWidget
             for (auto turn : revisionContext.turns)
                 turns.append(turn);
         }
+        if (!probe) site().applyEffort(payload, model->currentText());
         payload["messages"] = turns;
         const int outputLimit = probe ? 64 : site().outputLimit(model->currentText());
         if (outputLimit > 0)
@@ -428,7 +435,7 @@ class WritingAssistant : public QWidget
             else if (reply->bytesAvailable() > 0)
                 deadline.start(); // Some compatible sites return one JSON body instead of SSE.
         });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, summarizing, previousDraft, conversation, outputLimit] {
+        connect(reply, &QNetworkReply::finished, this, [this, reply, probe, writing, checking, summarizing, previousDraft, conversation, outputLimit] {
             progress.stop();
             deadline.stop();
             pending = nullptr;
@@ -501,6 +508,11 @@ class WritingAssistant : public QWidget
                                 (reasoningOnly ? "（本次短测试仅返回思考内容）" : ""));
                 return;
             }
+            if (checking)
+            {
+                status->setText(truncated ? QStringLiteral("检查结果已截断，请调整输出档位后重试。") : check->review(text));
+                return;
+            }
             if (summarizing)
             {
                 if (truncated) status->setText("摘要输出中断，原摘要已保留。");
@@ -552,7 +564,7 @@ class WritingAssistant : public QWidget
         }
     }
     WritingAssistant(Book &book, int currentChapter, QString excerpt, bool replacing, bool entireSelection, QHash<QString, QString> &keys,
-                     std::function<void()> back, std::function<void(QString, bool)> accept, bool summaryOnly = false)
+                     std::function<void()> back, std::function<void(QString, bool)> accept, bool summaryOnly = false, bool checkOnly = false)
         : wholeSelection(entireSelection), sessionKeys(keys)
     {
         auto *stack = new QStackedLayout(this);
@@ -690,7 +702,7 @@ class WritingAssistant : public QWidget
             const auto group = scope == NoteScope::Global ? WritingSources::GlobalSkill :
                                scope == NoteScope::Book ? WritingSources::BookSkill : WritingSources::Outline;
             sources->addHeading(group, scopeName(scope));
-            if (summaryOnly) continue;
+            if (summaryOnly || checkOnly) continue;
             for (const auto &note : WritingNotes(book, scope).list())
             {
                 QString label = note.title;
@@ -722,7 +734,7 @@ class WritingAssistant : public QWidget
         }
         const int currentIndex = chapterOrder.indexOf(currentChapter);
         targetChapter = numberedChapter(currentIndex + 1, chapters.value(currentChapter));
-        for (int i = currentIndex - 1; !summaryOnly && i >= 0; --i)
+        for (int i = currentIndex - 1; !summaryOnly && !checkOnly && i >= 0; --i)
         {
             const int id = chapterOrder.at(i);
             const auto label = numberedChapter(i + 1, chapters.value(id));
@@ -981,12 +993,18 @@ class WritingAssistant : public QWidget
         };
         connect(apply, &QPushButton::clicked, this, [adopt] { adopt(false); });
         connect(applyChapter, &QPushButton::clicked, this, [adopt] { adopt(true); });
-        if (summaryOnly)
+        if (checkOnly)
+        {
+            check = new ChapterCheck(book,currentChapter,[this](const QString &input) { submit(Request::Check,input); });
+            tabs->addTab(check,"检查本章");
+            heading->setText("章后漏记检查");
+        }
+        if (summaryOnly || checkOnly)
         {
             layout->setContentsMargins(0, 0, 0, 0);
-            heading->hide();
+            heading->setVisible(checkOnly);
             chapterTitle->hide();
-            close->hide();
+            close->setVisible(checkOnly);
             library->hide();
             top->insertWidget(0, new QLabel("服务"));
             top->insertWidget(1, service);
@@ -994,7 +1012,7 @@ class WritingAssistant : public QWidget
             top->insertWidget(3, model, 1);
             top->insertWidget(4, key, 1);
             top->insertWidget(5, test);
-            tabs->setCurrentWidget(summaries);
+            tabs->setCurrentWidget(checkOnly ? static_cast<QWidget *>(check) : static_cast<QWidget *>(summaries));
             tabs->tabBar()->hide();
         }
     }

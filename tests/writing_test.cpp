@@ -174,6 +174,16 @@ int main(int argc, char **argv)
         limitModel->setCurrentText("GLM-5.2");
         require(outputLimit->checkedId() == 0 && outputLimit->checkedButton()->text().contains("4,096"),
                 "旧版兼容接口默认输出上限错误");
+        auto *effort = window.findChild<QComboBox *>("modelReasoningEffort");
+        require(effort->isEnabled() && effort->findData("low") < 0, "GLM-5.2 强度档位错误");
+        effort->setCurrentIndex(effort->findData("high"));
+        click(window, "保存配置");
+        require(QJsonDocument::fromJson(QSettings().value("aiSites/zai-messages").toByteArray()).object()["efforts"].toObject()["GLM-5.2"]=="high",
+                "模型强度未持久化");
+        limitModel->setCurrentText("自选模型");
+        require(!effort->isEnabled() && effort->currentData().toString().isEmpty(),"不支持的模型继承了其他模型的强度");
+        limitModel->setCurrentText("GLM-5.2");
+        require(effort->currentData()=="high", "切换模型后丢失强度");
         outputLimit->button(8192)->click();
         require(modelField->toPlainText().contains("自选模型"), "重命名丢失已保存的模型");
         require(protocol->currentData() == "messages-bearer" && address->text() == "https://api.z.ai/api/anthropic",

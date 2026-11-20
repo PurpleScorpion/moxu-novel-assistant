@@ -44,6 +44,38 @@ struct AiSite
     QStringList models;
     QString protocol = "chat";
     QJsonObject outputLimits;
+    QJsonObject efforts;
+    QStringList effortLevels(const QString &model) const
+    {
+        const auto host = endpoint().host();
+        const auto m = model.toLower();
+        const bool glm = host == "api.z.ai" || host == "open.bigmodel.cn";
+        if (glm && m == "glm-5.2") return {"high","max"};
+        if ((glm && (m == "glm-5.3" || m == "glm-5.3-flash")) ||
+            (host == "api.deepseek.com" && QStringList{"deepseek-flash","deepseek-v4-pro","deepseek-v4-flash"}.contains(m)))
+            return {"low","high","max"};
+        return {};
+    }
+    QString effort(const QString &model) const
+    {
+        const auto value = efforts.value(model).toString();
+        return effortLevels(model).contains(value) ? value : QString();
+    }
+    void applyEffort(QJsonObject &payload, const QString &model) const
+    {
+        const auto value = effort(model);
+        if (value.isEmpty()) return;
+        payload["thinking"] = QJsonObject{{"type","enabled"}};
+        if (messagesApi()) payload["output_config"] = QJsonObject{{"effort", value}};
+        else payload["reasoning_effort"] = value;
+    }
+    static QString effortLabel(const QString &value)
+    {
+        if (value == "low") return "轻量 · 适合润色";
+        if (value == "high") return "增强 · 适合连贯性检查";
+        if (value == "max") return "深入 · 复杂推演，通常更耗时";
+        return "由服务决定";
+    }
     int outputLimit(const QString &model) const
     {
         const int configured = outputLimits.value(model).toInt();
@@ -118,7 +150,7 @@ inline QList<AiSite> aiSites()
         {"zai-messages",
          "智谱 GLM（ZCode 兼容）",
          "https://api.z.ai/api/anthropic",
-         {"GLM-5.2", "GLM-5-Turbo"},
+         {"GLM-5.2", "GLM-5-Turbo", "glm-5.3"},
          "messages-bearer"},
         {"local",
          "本机兼容服务",
@@ -136,6 +168,7 @@ inline QList<AiSite> aiSites()
         auto obj = QJsonDocument::fromJson(prefs.value(id).toByteArray()).object();
         AiSite site{id, obj["name"].toString(), obj["address"].toString(), obj["models"].toVariant().toStringList()};
         site.protocol = obj["protocol"].toString("chat");
+        site.efforts = obj["efforts"].toObject();
         site.outputLimits = obj["outputLimits"].toObject();
         auto it = std::find_if(sites.begin(), sites.end(), [&](const AiSite &s) { return s.id == id; });
         if (it == sites.end())
@@ -195,7 +228,8 @@ class AiConfig : public QWidget
     QComboBox *protocol = new DownwardCombo;
     QComboBox *limitModel = new DownwardCombo;
     QButtonGroup *limits = new QButtonGroup(this);
-    QJsonObject editedLimits;
+    QJsonObject editedLimits, editedEfforts;
+    QComboBox *effortChoice = new DownwardCombo;
     QLabel *modelGuide = new QLabel;
     QStringList modelNames() const
     {
@@ -209,7 +243,19 @@ class AiConfig : public QWidget
     }
     void showLimit()
     {
-        modelGuide->setText(modelOutputGuide(limitModel->currentText()));
+        const QString m = limitModel->currentText();
+        AiSite editing{id, {}, address->text(), {}, protocol->currentData().toString()};
+        {
+            QSignalBlocker block(effortChoice);
+            editing.efforts = editedEfforts;
+            const auto levels = editing.effortLevels(m);
+            effortChoice->clear();
+            effortChoice->addItem(AiSite::effortLabel({}),QString());
+            for (const auto &level : levels) effortChoice->addItem(AiSite::effortLabel(level),level);
+            effortChoice->setCurrentIndex(qMax(0, effortChoice->findData(editing.effort(m))));
+            effortChoice->setEnabled(!levels.isEmpty());
+        }
+        modelGuide->setText(modelOutputGuide(m));
         auto *fallback = limits->button(0);
         fallback->setText(protocol->currentData() == "chat" ? "默认（由站点决定）" : "默认（4,096）");
         auto *selected = limits->button(editedLimits.value(limitModel->currentText()).toInt());
@@ -311,6 +357,7 @@ class AiConfig : public QWidget
         protocol->setCurrentIndex(qMax(0, protocol->findData(site.protocol)));
         address->setText(site.address);
         editedLimits = site.outputLimits;
+        editedEfforts = site.efforts;
         {
             QSignalBlocker blockModels(models);
             models->setPlainText(site.models.join('\n'));
@@ -329,6 +376,9 @@ class AiConfig : public QWidget
         for (const auto &model : site.models)
             if (editedLimits.value(model).toInt() > 0)
                 site.outputLimits.insert(model, editedLimits.value(model));
+        for (const auto &m : site.models)
+            if (site.effortLevels(m).contains(editedEfforts.value(m).toString()))
+                site.efforts.insert(m, editedEfforts.value(m));
         if (site.name.isEmpty() || site.models.isEmpty())
             throw std::runtime_error("请填写站点名称，并至少配置一个模型。");
         if (!site.validAddress())
@@ -347,6 +397,7 @@ class AiConfig : public QWidget
                           QJsonDocument(QJsonObject{{"name", site.name},
                                                     {"protocol", site.protocol},
                                                     {"address", site.address},
+                                                    {"efforts", site.efforts},
                                                     {"outputLimits", site.outputLimits},
                                                     {"models", QJsonArray::fromStringList(site.models)}})
                               .toJson(QJsonDocument::Compact));
@@ -442,9 +493,22 @@ class AiConfig : public QWidget
         modelGuide->setWordWrap(true);
         modelGuide->setTextFormat(Qt::PlainText);
         form->addWidget(modelGuide);
-        output->addWidget(new QLabel("设置输出上限的模型"));
+        output->addWidget(new QLabel("设置参数的模型"));
         limitModel->setObjectName("limitModel");
         output->addWidget(limitModel, 1);
+        auto *effortRow = new QHBoxLayout;
+        form->addLayout(effortRow);
+        effortRow->addWidget(new QLabel("AI 思考强度"));
+        effortChoice->setObjectName("modelReasoningEffort");
+        effortRow->addWidget(effortChoice, 1);
+        connect(effortChoice, &QComboBox::currentIndexChanged, this, [this] {
+            const auto level = effortChoice->currentData().toString();
+            if (level.isEmpty()) editedEfforts.remove(limitModel->currentText());
+            else editedEfforts.insert(limitModel->currentText(), level);
+        });
+        auto *effortHelp = new QLabel("思考强度调节推理深度。思考也可能消耗输出预算。未适配的站点或型号沿用服务默认值。");
+        effortHelp->setWordWrap(true);
+        form->addWidget(effortHelp);
         form->addWidget(new QLabel("最大输出 token（单选）"));
         auto *choices = new QGridLayout;
         form->addLayout(choices);
@@ -503,6 +567,7 @@ class AiConfig : public QWidget
             notice->setText("协议已更改，请核对基础地址并填写对应的密钥。");
         });
         connect(address, &QLineEdit::textChanged, this, [this] {
+            showLimit();
             cancelCatalog();
             key->clear();
             remember->setChecked(false);

@@ -66,7 +66,7 @@ class Window : public QMainWindow
         sheet = new WriterSheet(title, [this] { closeSheet(); });
         writerColumns->addWidget(sheet, 3);
     }
-    void aiWriting()
+    void aiWriting(bool checkOnly = false)
     {
         save();
         QPointer<QWidget> previousFocus = QApplication::focusWidget();
@@ -142,7 +142,7 @@ class Window : public QMainWindow
         };
         const bool entireSelection = start != end && start == 0 && end == editor->document()->characterCount() - 1;
         auto *panel = new WritingAssistant(*book, chapter, excerpt, selection.hasSelection(), entireSelection,
-                                           sessionKeys, back, accept);
+                                           sessionKeys, back, accept, false, checkOnly);
         pages->addWidget(panel);
         pages->setCurrentWidget(panel);
         tools->hide();
@@ -203,6 +203,31 @@ class Window : public QMainWindow
         if (!people->count())
             sheet->report("请先在资料工作区建立人物档案。");
         return people;
+    }
+    void markClue()
+    {
+        save();
+        beginSheet("标记伏笔");
+        auto *choice = new DownwardCombo;
+        choice->addItem("新建伏笔",0);
+        auto q = book->run("SELECT id,title,status FROM foreshadows ORDER BY id");
+        while(q.next()) choice->addItem(q.value(1).toString()+" · "+q.value(2).toString(),q.value(0));
+        sheet->form->addWidget(choice);
+        auto *name = sheet->field("新伏笔名称");
+        connect(choice,&QComboBox::currentIndexChanged,name,[=](int i){ name->setEnabled(i==0); });
+        const int start=insertion.selectionStart();
+        QString quote=insertion.selectedText().replace(QChar::ParagraphSeparator,'\n');
+        const auto version=book->value("SELECT body_version FROM chapters WHERE id=?",{chapter}).toLongLong();
+        for(bool resolved:{false,true})
+        {
+            auto *action=button(sheet->form,resolved ? "将选区标记为回收" : "将选区标记为埋设",[=,this] {
+                Clue::mark(*book,choice->currentData().toInt(),name->text(),resolved,chapter,version,start,quote);
+                closeSheet(); status->confirm("伏笔标记");
+            });
+            action->setEnabled(!quote.trimmed().isEmpty());
+        }
+        button(sheet->form,"管理本书伏笔",[this]{ enterDossier(Dossier::clueIndex); });
+        if(quote.trimmed().isEmpty()) sheet->report("请先在章节中选中埋设或回收伏笔的原句，也可以进入伏笔管理页提前规划。");
     }
     void insertPerson()
     {
@@ -1198,6 +1223,8 @@ class Window : public QMainWindow
         tools->addSeparator();
         tool("人物名字", [this] { insertPerson(); });
         tool("属性面板", [this] { panel(); });
+        tool("检查本章", [this] { aiWriting(true); }, false);
+        tool("伏笔", [this] { markClue(); });
         tool("记录事件", [this] { record(); });
         tools->addSeparator();
         tool("剧情大事", [this] {
@@ -1287,6 +1314,23 @@ class Window : public QMainWindow
                 restored.setPosition(pos, QTextCursor::KeepAnchor);
                 editor->setTextCursor(restored);
                 editor->verticalScrollBar()->setValue(scroll);
+            }, [this,focusWriter](int id,int pos,int length) {
+                guard([&] {
+                    dossier->flush();
+                    closeSheet();
+                    focusWriter();
+                    for(int row=0; row<chapters->count(); ++row)
+                        if(chapters->item(row)->data(Qt::UserRole).toInt()==id)
+                        {
+                            chapters->setCurrentRow(row);
+                            loadChapter(id);
+                            QTextCursor cursor(editor->document());
+                            cursor.setPosition(pos);
+                            cursor.setPosition(pos+length,QTextCursor::KeepAnchor);
+                            editor->setTextCursor(cursor); editor->centerCursor(); editor->setFocus();
+                            break;
+                        }
+                });
             });
         pages->addWidget(dossier);
         showShelf();
