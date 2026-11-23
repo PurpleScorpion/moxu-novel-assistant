@@ -183,6 +183,14 @@ Book::Book(const QString &path, const QString &newTitle)
             "FROM supplies s JOIN events e ON e.id=s.event_id UNION ALL "
             "SELECT s.name,e.id,e.chapter,s.recipient,-s.change FROM supplies s JOIN events e ON e.id=s.event_id "
             "WHERE s.recipient IS NOT NULL");
+        run("CREATE TABLE IF NOT EXISTS story_tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,"
+            "instructions TEXT NOT NULL,person INTEGER NOT NULL REFERENCES people(id),"
+            "published INTEGER NOT NULL REFERENCES chapters(id),completed INTEGER REFERENCES chapters(id),"
+            "revision INTEGER NOT NULL DEFAULT 1)");
+        run("CREATE TABLE IF NOT EXISTS task_rewards(id INTEGER PRIMARY KEY,task INTEGER NOT NULL REFERENCES story_tasks(id) ON DELETE CASCADE,"
+            "kind TEXT NOT NULL CHECK(kind IN ('numeric','supply','item','skill')),name TEXT NOT NULL,"
+            "quantity INTEGER NOT NULL CHECK(quantity>0),level TEXT,cooldown TEXT,uses INTEGER NOT NULL,"
+            "event INTEGER UNIQUE REFERENCES events(id),UNIQUE(task,kind,name))");
         run("CREATE TABLE IF NOT EXISTS foreshadows(id INTEGER PRIMARY KEY,title TEXT NOT NULL,status TEXT NOT NULL,"
             "expected INTEGER REFERENCES chapters(id), note TEXT NOT NULL DEFAULT '')");
         run("CREATE TABLE IF NOT EXISTS clue_quotes(clue INTEGER NOT NULL REFERENCES foreshadows(id) ON DELETE CASCADE,"
@@ -542,12 +550,13 @@ void Book::plotStep(const QString &arc, const QString &strand, int chapter, cons
         validatePlot(*this, title);
     });
 }
-void Book::event(int chapter, int person, const QString &resource, int delta, const QString &description,
+qint64 Book::event(int chapter, int person, const QString &resource, int delta, const QString &description,
                  const QString *body)
 {
+    qint64 id = 0;
     atomic([&] {
-        run("INSERT INTO events(chapter,person,resource,delta,description) VALUES(?,?,?,?,?)",
-            {chapter, person, resource, delta, description});
+        id = run("INSERT INTO events(chapter,person,resource,delta,description) VALUES(?,?,?,?,?)",
+            {chapter, person, resource, delta, description}).lastInsertId().toLongLong();
         if (value("SELECT MIN(total) FROM (SELECT SUM(delta) OVER(ORDER BY seq,id ROWS UNBOUNDED PRECEDING) total "
                   "FROM ordered_events WHERE person=? AND resource=?)",
                   {person, resource})
@@ -556,6 +565,7 @@ void Book::event(int chapter, int person, const QString &resource, int delta, co
         if (body)
             save(chapter, *body);
     });
+    return id;
 }
 
 QStringList Book::ownedItems(int person, int chapter) const
@@ -585,16 +595,17 @@ qint64 insertStoryRow(Book &book, int chapter, int person, const QString &descri
 }
 } // namespace
 
-void Book::storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
+qint64 Book::storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
                       const QString &description, const QString *body)
 {
     const QString name = item.trimmed();
+    qint64 id = 0;
     atomic([&] {
         if (kind != StoryKind::Note && name.isEmpty())
             fail("请选择或填写道具名称。");
         if (kind == StoryKind::Transfer && (!recipient || recipient == person))
             fail("请选择另一位人物作为接收人。");
-        const auto id = insertStoryRow(*this, chapter, person, description);
+        id = insertStoryRow(*this, chapter, person, description);
         const QString type = kind == StoryKind::Note ? "note" : kind == StoryKind::Acquire ? "acquire" : "transfer";
         run("INSERT INTO event_details(event_id,kind,name,recipient) VALUES(?,?,?,?)",
             {id, type, kind == StoryKind::Note ? QVariant() : QVariant(name),
@@ -606,6 +617,7 @@ void Book::storyEvent(int chapter, int person, StoryKind kind, const QString &it
         if (body)
             save(chapter, *body);
     });
+    return id;
 }
 
 QMap<QString, qint64> Book::supplyCounts(int person, int chapter) const
@@ -621,7 +633,7 @@ QMap<QString, qint64> Book::supplyCounts(int person, int chapter) const
     return counts;
 }
 
-void Book::supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
+qint64 Book::supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
                        const QString &description, const QString *body)
 {
     const auto item = name.trimmed();
@@ -629,8 +641,9 @@ void Book::supplyEvent(int chapter, int person, SupplyAction action, const QStri
         fail("请选择或填写消耗品名称，并填写正整数数量。");
     if (action == SupplyAction::Give && (!recipient || recipient == person))
         fail("请选择另一位人物作为接收人。");
+    qint64 id = 0;
     atomic([&] {
-        const auto id = insertStoryRow(*this, chapter, person, description);
+        id = insertStoryRow(*this, chapter, person, description);
         run("INSERT INTO supplies(event_id,name,change,recipient) VALUES(?,?,?,?)",
             {id, item, action == SupplyAction::Receive ? amount : -amount,
              action == SupplyAction::Give ? QVariant(recipient) : QVariant()});
@@ -643,6 +656,7 @@ void Book::supplyEvent(int chapter, int person, SupplyAction action, const QStri
         if (body)
             save(chapter, *body);
     });
+    return id;
 }
 
 namespace
@@ -698,7 +712,7 @@ QList<CharacterSkill> Book::characterSkills(int person, int chapter) const
     return readSkills(*this, person, chapter);
 }
 
-void Book::skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
+qint64 Book::skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
                       const QString &description, const QString *body)
 {
     const auto name = skill.name.trimmed();
@@ -706,8 +720,9 @@ void Book::skillEvent(int chapter, int person, SkillAction action, const Charact
         fail("请选择或填写技能／功法名称。");
     if (action == SkillAction::Learn && (skill.remaining == 0 || skill.remaining < -1))
         fail("可用次数请选择不限或至少一次。");
+    qint64 id = 0;
     atomic([&] {
-        const auto id = insertStoryRow(*this, chapter, person, description);
+        id = insertStoryRow(*this, chapter, person, description);
         const QString type = action == SkillAction::Learn     ? "learn"
                              : action == SkillAction::Advance ? "advance"
                                                               : "use";
@@ -718,6 +733,7 @@ void Book::skillEvent(int chapter, int person, SkillAction action, const Charact
         if (body)
             save(chapter, *body);
     });
+    return id;
 }
 
 int Book::insertChapter(const QString &title, int anchor, bool after)
@@ -747,6 +763,9 @@ void Book::moveChapter(int id, int direction)
         if (!position || !other) fail("已经位于目录边界。");
         run("UPDATE chapters SET position=CASE id WHEN ? THEN ? ELSE ? END WHERE id IN (?,?)",
             {id, position + direction, position, id, other});
+        if (value("SELECT 1 FROM story_tasks t JOIN chapters a ON a.id=t.published JOIN chapters b ON b.id=t.completed "
+                  "WHERE a.position>b.position AND t.published IN (?,?) LIMIT 1", {id,other}).isValid())
+            fail("无法调序：调整后任务的完成章节会早于发布章节。");
         // An adjacent swap only changes the relative order of events in these two chapters.
         if (value("SELECT count(DISTINCT chapter) FROM journal WHERE chapter IN (?,?)", {id, other}).toInt() < 2)
             return;

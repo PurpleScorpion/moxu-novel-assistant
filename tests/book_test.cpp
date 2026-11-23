@@ -1,4 +1,5 @@
 #include "book.h"
+#include "story_tasks.h"
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -272,11 +273,57 @@ int main(int argc, char **argv)
         other.run("INSERT INTO chapter_summaries(chapter,body,source_version) VALUES(?,?,0)",
                   {extra, "【第 2 章 · 番外】\n奖励灵石。"});
         other.moveChapter(extra, -1);
-        if (reopened.value("SELECT body FROM chapter_summaries WHERE chapter=?", {extra}) != "【第 1 章 · 番外】\n奖励灵石。" ||
+        if (reopened.value("SELECT body FROM chapter_summaries WHERE chapter=?", {extra}) !=
+                "【第 1 章 · 番外】\n奖励灵石。" ||
             reopened.ledgerPage({"", "灵石", "", false}, 1).rows.first().first() != "第 1 章 · 番外" ||
             !reopened.ownedItems(1, extra).isEmpty() || !reopened.characterSkills(1, extra).isEmpty() ||
             reopened.supplyCounts(1, extra).value("血瓶") != 0)
             return 35;
+        const auto taskFile = dir.filePath("tasks.moxu");
+        {
+            Book legacy(taskFile, "任务测试");
+            legacy.run("INSERT INTO people VALUES(1,'玄都','')");
+            legacy.insertChapter("归来");
+            legacy.run("DROP TABLE task_rewards");
+            legacy.run("DROP TABLE story_tasks");
+        }
+        Book tasks(taskFile);
+        tasks.saveCatalogEntry({"item", "玉符"});
+        tasks.saveCatalogEntry({"supply", "丹药"});
+        tasks.saveCatalogEntry({"skill", "遁法", "入门", "一日", 2});
+        StoryTask t;
+        t.title = "归山";
+        t.person = 1;
+        t.published = 2;
+        t.rewards = {
+            {{"numeric", "积分"}, 300}, {{"supply", "丹药"}, 3}, {{"skill", "遁法"}, 1}, {{"item", "玉符"}, 1}};
+        int id = StoryTasks::save(tasks, t);
+        Book concurrent(taskFile);
+        t = StoryTasks::get(concurrent, id);
+        if (!rejected([&] { StoryTasks::complete(tasks, id, t.revision, 1); }))
+            return 37;
+        tasks.storyEvent(1, 1, StoryKind::Acquire, "玉符", 0, "已有道具");
+        if (!rejected([&] { StoryTasks::complete(tasks, id, t.revision, 2); }) || tasks.balance(1, "积分", 2) != 0 ||
+            StoryTasks::get(tasks, id).completed || tasks.value("SELECT count(*) FROM events").toInt() != 1)
+            return 38;
+        tasks.removeCatalogEntry({"skill", "遁法"});
+        t.rewards.removeLast();
+        t.published = 1;
+        tasks.saveCatalogEntry({"item", "通行令"});
+        t.rewards.append({{"item", "通行令"}, 1});
+        StoryTasks::save(tasks, t);
+        if (!rejected([&] { StoryTasks::save(concurrent, t); }))
+            return 39;
+        t = StoryTasks::get(tasks, id);
+        StoryTasks::complete(tasks, id, t.revision, 2);
+        if (!rejected([&] { StoryTasks::complete(concurrent, id, t.revision, 2); }) ||
+            !rejected([&] { StoryTasks::remove(concurrent, id, t.revision); }) ||
+            !rejected([&] { tasks.moveChapter(2, -1); }) || tasks.balance(1, "积分", 2) != 300 ||
+            concurrent.supplyCounts(1, 2).value("丹药") != 3 ||
+            concurrent.characterSkills(1, 2).first().remaining != 2 ||
+            !concurrent.ownedItems(1, 2).contains("通行令") ||
+            concurrent.value("SELECT count(event) FROM task_rewards WHERE task=?", {id}).toInt() != 4)
+            return 40;
     }
     catch (const std::exception &e)
     {

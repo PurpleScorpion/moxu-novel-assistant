@@ -103,18 +103,18 @@ class Book
     void setHistoryLimits(HistoryLimits limits, qint64 expectedRemoval);
     qint64 historyCleanupCount() const;
     void includeLegacyInHistoryLimit(qint64 expectedRemoval);
-    void event(int chapter, int person, const QString &resource, int delta, const QString &description,
+    qint64 event(int chapter, int person, const QString &resource, int delta, const QString &description,
                const QString *body = nullptr);
     qint64 balance(int person, const QString &resource, int chapter) const;
     QMap<QString, QString> resourceBalances(int person, int chapter) const;
     QStringList ownedItems(int person, int chapter) const;
     QMap<QString, qint64> supplyCounts(int person, int chapter) const;
-    void supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
+    qint64 supplyEvent(int chapter, int person, SupplyAction action, const QString &name, int amount, int recipient,
                      const QString &description, const QString *body = nullptr);
-    void storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
+    qint64 storyEvent(int chapter, int person, StoryKind kind, const QString &item, int recipient,
                     const QString &description, const QString *body = nullptr);
     QList<CharacterSkill> characterSkills(int person, int chapter) const;
-    void skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
+    qint64 skillEvent(int chapter, int person, SkillAction action, const CharacterSkill &skill,
                     const QString &description, const QString *body = nullptr);
     QStringList resourceNames() const;
     QList<CatalogEntry> catalog(const QString &kind = {}, bool includeHistory = false) const;

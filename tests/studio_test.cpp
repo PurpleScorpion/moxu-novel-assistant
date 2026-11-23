@@ -130,7 +130,7 @@ int main(int argc, char **argv)
         auto local = QJsonDocument::fromJson(settings.value("aiSites/local").toByteArray()).object();
         local["protocol"] = "messages-bearer";
         settings.setValue("aiSites/local", QJsonDocument(local).toJson());
-        nav->setCurrentRow(Dossier::summaryIndex + 1);
+        selectDossierPage(nav, Dossier::summaryIndex + 1);
         answer = "@@人物|新弟子\n未命名\n@@人物|玄都\n同名冲突\n@@章节目录|下山\n告别山门";
         for (auto *c : w.findChildren<QCheckBox *>())
             if (c->isVisible() && c->text() == "章节目录")
@@ -267,7 +267,7 @@ int main(int argc, char **argv)
         const auto clue = db.value("SELECT id FROM foreshadows WHERE title='灵石来历'").toInt();
         require(clue && db.value("SELECT quote FROM clue_quotes WHERE clue=?", {clue}) == earned, "未保留原始选区");
         tool("返回资料工作区");
-        shown<QListWidget>(w, "navigation")->setCurrentRow(Dossier::clueIndex);
+        selectDossierPage(shown<QListWidget>(w, "navigation"), Dossier::clueIndex);
         click(w, "埋设原文 · 第 3 章 · 下山 · 定位");
         require(manuscript->isVisible() && manuscript->textCursor().selectedText() == earned, "伏笔未返回原句");
         db.moveChapter(chapterId(3), -1);
@@ -335,6 +335,46 @@ int main(int argc, char **argv)
         click(audit, "检查本章");
         audit.review(records);
         require(grid->item(8, 3)->toolTip() == "账本已有匹配", "重新分析丢失了作者纠正的事件类型");
+
+        tool("返回资料工作区");
+        nav = shown<QListWidget>(w, "navigation");
+        const auto menu = nav->findItems("任务管理", Qt::MatchExactly);
+        require(menu.size() == 1 && nav->item(nav->row(menu.first()) + 1)->text() == "资源管理" &&
+                    nav->item(nav->row(menu.first()) + 2)->text() == "事件账本",
+                "任务与资源菜单顺序错误");
+        nav->setCurrentItem(menu.first());
+        click(w, "新建任务");
+        shown<QLineEdit>(w, "taskTitle")->setText("初入昆仑");
+        shown<QComboBox>(w, "taskPerson")->setCurrentIndex(shown<QComboBox>(w, "taskPerson")->findData(person));
+        auto *start = shown<QComboBox>(w, "taskPublished");
+        start->setCurrentIndex(start->findData(chapterId(1)));
+        auto *res = shown<QComboBox>(w, "taskResource");
+        res->setCurrentText("数值资源 · 积分");
+        shown<QSpinBox>(w, "taskQuantity")->setValue(300);
+        click(w, "添加奖励");
+        res->setCurrentText("消耗品 · 丹药");
+        shown<QSpinBox>(w, "taskQuantity")->setValue(2);
+        click(w, "添加奖励");
+        shown<QPlainTextEdit>(w, "taskInstructions")->setPlainText("将玉符送抵昆仑，向师父复命。");
+        nav->setCurrentItem(nav->findItems("资源管理", Qt::MatchExactly).first());
+        nav->setCurrentItem(menu.first());
+        require(shown<QTableWidget>(w, "taskRewards")->rowCount() == 2 &&
+                    shown<QLineEdit>(w, "taskTitle")->text() == "初入昆仑",
+                "切换资料页遗失任务草稿");
+        click(w, "发布任务");
+        require(message(w, "任务已发布") && db.balance(person, "积分", testChapter) == 0, "发布时提前发奖");
+        click(w, "查看任务");
+        auto *end = shown<QComboBox>(w, "taskCompleted");
+        end->setCurrentIndex(end->findData(testChapter));
+        click(w, "完成任务并发奖");
+        require(message(w, "奖励已结算") && db.balance(person, "积分", testChapter) == 300 &&
+                    db.balance(person, "积分", chapterId(1)) == 0,
+                "任务奖励章节或余额错误");
+        nav->setCurrentItem(nav->findItems("事件账本", Qt::MatchExactly).first());
+        require(db.ledgerPage({"玄都", "积分", "初入昆仑", true}, 1).total == 1, "任务奖励没有进入账本");
+        nav->setCurrentItem(menu.first());
+        click(w, "查看任务");
+        require(shown<QLineEdit>(w, "taskTitle")->isReadOnly() && message(w, "奖励已结算"), "已完成任务未锁定");
 
         AiSite glm{"zai-messages", "GLM", "https://api.z.ai/api/anthropic", {"glm-5.3"}, "messages-bearer"};
         QJsonObject payload;

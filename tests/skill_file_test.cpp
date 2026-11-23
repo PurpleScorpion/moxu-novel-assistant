@@ -67,7 +67,7 @@ int main(int argc, char **argv)
         page.enter(&book);
         page.show();
         auto *nav = page.findChild<QListWidget *>("navigation");
-        nav->setCurrentRow(5);
+        selectDossierPage(nav, 5);
         const auto shared = dir.filePath("SKILL.md");
         for (auto *editor : page.findChildren<QPlainTextEdit *>())
             if (editor->isVisible())
@@ -80,7 +80,7 @@ int main(int argc, char **argv)
         fileAction(page, "导入 SKILL.md…", shared, 0, true);
         check(WritingNotes(book, NoteScope::Global).list().isEmpty(), "取消导入留下了条目");
         fileAction(page, "导入 SKILL.md…", shared, 0);
-        check(nav->currentRow() == 4 && WritingNotes(book, NoteScope::Global).list().first().title == authored.title,
+        check(nav->currentItem()->data(Qt::UserRole).toInt() == 4 && WritingNotes(book, NoteScope::Global).list().first().title == authored.title,
               "导入全局失败");
         const QString external = dir.filePath("人物对话.md");
         QString header = "name: dialogue\ndescription: >-\n  对话练习，\n  保留人物口吻。\nmetadata:\n  author: "
@@ -90,7 +90,7 @@ int main(int argc, char **argv)
                           QString("---\n" + header + "---\n" + instructions).replace("\n", "\r\n").toUtf8());
         fileAction(page, "导入 SKILL.md…", external, 1);
         auto notes = WritingNotes(book, NoteScope::Book).list();
-        check(nav->currentRow() == 5 && notes.size() == 2 && notes.last().body == instructions &&
+        check(nav->currentItem()->data(Qt::UserRole).toInt() == 5 && notes.size() == 2 && notes.last().body == instructions &&
                   notes.last().skillHeader == header,
               "外部 Skill 正文或元数据有误");
         auto copy = dir.filePath("分享.md");

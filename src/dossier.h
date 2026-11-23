@@ -8,11 +8,26 @@
 #include "interface.h"
 #include "plot_page.h"
 #include "foreshadow.h"
+#include "task_page.h"
 #include "note_editor.h"
 #include "writing_assistant.h"
 #include "creation_studio.h"
 #include <functional>
 
+// Page IDs index the content stack. Menu rows also include group headings and may be reordered.
+inline void selectDossierPage(QListWidget *navigation, int page)
+{
+    for (int row = 0; row < navigation->count(); ++row)
+    {
+        auto *item = navigation->item(row);
+        const auto id = item->data(Qt::UserRole);
+        if (id.isValid() && id.toInt() == page)
+        {
+            navigation->setCurrentItem(item);
+            return;
+        }
+    }
+}
 class Dossier : public QWidget
 {
     Book *book = nullptr;
@@ -39,6 +54,7 @@ class Dossier : public QWidget
     std::function<void(QString)> renameBook;
     bool loading = false;
     EventLedger *ledger;
+    TaskPage *tasks = new TaskPage;
     Foreshadows *clues = new Foreshadows;
     PlotPage *plots = new PlotPage;
     ResourceCatalog *catalogPage = new ResourceCatalog;
@@ -219,7 +235,7 @@ class Dossier : public QWidget
             ledger->load(*book, preferredSnapshotChapter);
         else if (page == plotIndex)
             plots->load(*book);
-        else if (page == plotIndex + 1)
+        else if (page == catalogIndex)
             catalogPage->load(*book);
         else if (page == summaryIndex)
         {
@@ -231,7 +247,7 @@ class Dossier : public QWidget
                 summaryLayout->addWidget(summaryWorkspace, 1);
             }
         }
-        else if (page == summaryIndex + 1)
+        else if (page == studioIndex)
         {
             if (!studio)
             {
@@ -239,15 +255,31 @@ class Dossier : public QWidget
                 studioLayout->addWidget(studio, 1);
             }
         }
-        else if (page == clueIndex) clues->load(*book);
+        else if (page == taskIndex)
+            tasks->load(*book, preferredSnapshotChapter);
+        else if (page == clueIndex)
+            clues->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
 
   public:
-    static constexpr int plotIndex = 7;
-    static constexpr int summaryIndex = plotIndex + 2;
-    static constexpr int clueIndex = summaryIndex + 2;
+    enum PageId
+    {
+        overviewIndex,
+        personIndex,
+        relationIndex,
+        ledgerIndex,
+        globalSkillIndex,
+        bookSkillIndex,
+        outlineIndex,
+        plotIndex,
+        catalogIndex,
+        summaryIndex,
+        studioIndex,
+        clueIndex,
+        taskIndex
+    };
     int currentPage() const
     {
         return details->currentIndex();
@@ -275,6 +307,7 @@ class Dossier : public QWidget
         closeSummaryWorkspace();
         ledger->resetBook();
         catalogPage->resetBook();
+        tasks->resetBook();
     }
     Dossier(QHash<QString, QString> &keys, std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
             std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {}, std::function<void(int,int,int)> jump = {})
@@ -287,14 +320,42 @@ class Dossier : public QWidget
         side->parentWidget()->setFixedWidth(184);
         side->addWidget(new MatrixBanner("基础资料"));
         navigation->setObjectName("navigation");
-        navigation->addItems({"书籍概览", "人物档案", "人物关系", "事件账本"});
-        for (auto scope : {NoteScope::Global, NoteScope::Book, NoteScope::Outline})
-            navigation->addItem(scopeName(scope));
-        navigation->addItem("剧情大事");
-        navigation->addItem("资源管理");
-        navigation->addItem("剧情摘要");
-        navigation->addItem("创作台");
-        navigation->addItem("伏笔");
+        navigation->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        navigation->setFont(QFont("Microsoft YaHei UI",10));
+        navigation->setStyleSheet("QListWidget#navigation::item { padding:3px 14px; }"
+                                  "QListWidget#navigation::item:disabled { padding-left:3px; border-top:1px solid #304a3b; }");
+        auto group = [this](const QString &label) {
+            auto *item = new QListWidgetItem(label, navigation);
+            item->setFlags(Qt::NoItemFlags);
+            auto font = item->font();
+            font.setPointSize(9);
+            font.setBold(true);
+            item->setFont(font);
+            item->setForeground(QColor("#95b5a0"));
+            item->setSizeHint(QSize(100, 28));
+        };
+        auto link = [this](int page, const QString &label) {
+            auto *item = new QListWidgetItem(label, navigation);
+            item->setData(Qt::UserRole, page);
+            item->setSizeHint(QSize(100, 27));
+        };
+        group("创作规划");
+        link(overviewIndex, "书籍概览");
+        link(studioIndex, "创作台");
+        link(outlineIndex, scopeName(NoteScope::Outline));
+        link(summaryIndex, "剧情摘要");
+        group("人物与剧情");
+        link(personIndex, "人物档案");
+        link(relationIndex, "人物关系");
+        link(plotIndex, "剧情大事");
+        link(clueIndex, "伏笔");
+        group("任务与资源");
+        link(taskIndex, "任务管理");
+        link(catalogIndex, "资源管理");
+        link(ledgerIndex, "事件账本");
+        group("写作规则");
+        link(bookSkillIndex, scopeName(NoteScope::Book));
+        link(globalSkillIndex, scopeName(NoteScope::Global));
         clues->jump = std::move(jump);
         side->addWidget(navigation);
         auto *write = btn("进入专注写作", side);
@@ -507,7 +568,7 @@ class Dossier : public QWidget
         {
             auto *editor = new NoteEditor(scope, [this](NoteScope target, qint64 id) {
                 int index = target == NoteScope::Global ? 0 : 1;
-                navigation->setCurrentRow(4 + index);
+                selectDossierPage(navigation,4 + index);
                 notePages.at(index)->showImported(id);
             });
             notePages.append(editor);
@@ -518,9 +579,11 @@ class Dossier : public QWidget
         summaryLayout = section("剧情摘要", false);
         studioLayout = section("创作台", false);
         section("伏笔")->addWidget(clues,1);
-        connect(navigation, &QListWidget::currentRowChanged, this, [this](int page) {
-            if (!book || page < 0)
+        section("任务管理")->addWidget(tasks,1);
+        connect(navigation, &QListWidget::currentRowChanged, this, [this](int row) {
+            if (!book || row < 0 || !navigation->item(row)->data(Qt::UserRole).isValid())
                 return;
+            const int page=navigation->item(row)->data(Qt::UserRole).toInt();
             safe([&] {
                 int current = details->currentIndex();
                 try
@@ -531,7 +594,7 @@ class Dossier : public QWidget
                 catch (...)
                 {
                     QSignalBlocker b(navigation);
-                    navigation->setCurrentRow(current);
+                    selectDossierPage(navigation,current);
                     throw;
                 }
                 details->setCurrentIndex(page);
@@ -591,6 +654,8 @@ class Dossier : public QWidget
         const int page = details->currentIndex();
         if (page >= 4 && page < plotIndex)
             notePages.at(page - 4)->saveNow();
+        else if (page == taskIndex)
+            tasks->saveNow();
         else if (page == plotIndex)
             plots->saveNow();
         else if (page == summaryIndex && summaryWorkspace)
@@ -614,7 +679,7 @@ class Dossier : public QWidget
         bookFile = source->filePath();
         notice->clear();
         QSignalBlocker block(navigation);
-        navigation->setCurrentRow(page);
+        selectDossierPage(navigation,page);
         details->setCurrentIndex(page);
         if (page == plotIndex)
             plots->load(*book, preferredChapter);

@@ -168,7 +168,7 @@ int main(int argc, char **argv)
     if (editor->isVisible() || !window.windowTitle().contains("测试书"))
         return 2;
     auto *nav = window.findChild<QListWidget *>("navigation");
-    nav->setCurrentRow(1);
+    selectDossierPage(nav, 1);
     auto *name = window.findChild<QLineEdit *>("personName");
     auto *attrs = window.findChild<QPlainTextEdit *>("personAttrs");
     if (!name->isVisible() || !click("新建人物"))
@@ -196,8 +196,8 @@ int main(int argc, char **argv)
         verify.value("SELECT attributes FROM people WHERE name='林澈'").toString() != attrs->toPlainText())
         return 41;
     attrs->appendPlainText("身份：外门弟子");
-    nav->setCurrentRow(2);
-    nav->setCurrentRow(1);
+    selectDossierPage(nav, 2);
+    selectDossierPage(nav, 1);
     if (name->text() != "林澈" || !attrs->toPlainText().contains("外门弟子") || app.activeModalWidget())
         return 12;
     if (argc == 2 && !window.grab().save(QString::fromLocal8Bit(argv[1])))

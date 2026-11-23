@@ -200,7 +200,7 @@ int main(int argc, char **argv)
         QTest::keyClick(recent, Qt::Key_Return);
         auto *nav = window.findChild<QListWidget *>("navigation");
         auto edit = [&](int page, QString name, QString content) {
-            nav->setCurrentRow(page);
+            selectDossierPage(nav, page);
             click(window, page == 6 ? "新增大纲条目" : "新增 Skill");
             visible<QLineEdit>(window)->setText(name);
             visible<QPlainTextEdit>(window)->setPlainText(content);
@@ -215,7 +215,7 @@ int main(int argc, char **argv)
         Book verify(path);
         for (auto page : {4, 5, 6})
         {
-            nav->setCurrentRow(page);
+            selectDossierPage(nav, page);
             auto *body = visible<QPlainTextEdit>(window);
             const QString original = body->toPlainText();
             body->appendPlainText("自动保存测试");
@@ -224,8 +224,8 @@ int main(int argc, char **argv)
             require(QTest::qWaitFor([&] { return stored() == body->toPlainText(); }, 4000),
                     "资料未定时落盘或切页后选错条目");
             body->setPlainText(original + "！");
-            nav->setCurrentRow(1);
-            nav->setCurrentRow(page);
+            selectDossierPage(nav, 1);
+            selectDossierPage(nav, page);
             require(body->toPlainText() == original + "！", "切回页面丢失修改");
             body->setPlainText(original);
             window.activateWindow();
@@ -817,7 +817,7 @@ data: {"type":"message_stop"}
         check.run("UPDATE chapters SET body=? WHERE id=12", {QString(1000, QChar(u'文'))});
         for (auto *action : window.findChildren<QAction *>())
             if (action->text() == "返回资料工作区") action->trigger();
-        nav->setCurrentRow(Dossier::summaryIndex);
+        selectDossierPage(nav, Dossier::summaryIndex);
         click(window, "一键生成缺失摘要");
         require(waitStatus("已生成 1 章，已有摘要 1 章，不足 1000 字 2 章") &&
                     check.value("SELECT body FROM chapter_summaries WHERE chapter=12") == "【第 4 章 · 尾声】\n山门前" &&
@@ -832,8 +832,8 @@ data: {"type":"message_stop"}
                     return check.value("SELECT body FROM chapter_summaries WHERE chapter=9") == "【第 3 章 · 入城】\n山门前";
                 }), "基础资料指定章节生成失败");
         check.run("UPDATE chapters SET body=? WHERE id=9", {QString(1001, QChar(u'乙'))});
-        nav->setCurrentRow(0);
-        nav->setCurrentRow(Dossier::summaryIndex);
+        selectDossierPage(nav, 0);
+        selectDossierPage(nav, Dossier::summaryIndex);
         auto *summaryList = visible<QTableWidget>(window);
         require(summaryList->rowCount() == 4 && summaryList->item(2, 1)->text() == "1001" &&
                     summaryList->item(2, 2)->text() == "正文已修改" && summaryList->item(1, 2)->text() == "无摘要",
@@ -845,8 +845,8 @@ data: {"type":"message_stop"}
         edit(6, "境界", "从练气开始");
         click(window, "上移");
         require(WritingNotes(check, NoteScope::Outline).list().first().title == "境界", "大纲未上移");
-        nav->setCurrentRow(0);
-        nav->setCurrentRow(6);
+        selectDossierPage(nav, 0);
+        selectDossierPage(nav, 6);
         click(window, "下移");
         require(WritingNotes(check, NoteScope::Outline).list().first().title == "入山", "大纲未下移或选项未恢复");
         click(window, "在选中条目前插入");

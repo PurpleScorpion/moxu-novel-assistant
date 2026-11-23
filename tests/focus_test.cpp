@@ -207,7 +207,7 @@ int main(int argc, char **argv)
         window.findChild<QSpinBox *>("bookHistoryLimit")->setValue(7);
         click(window, "应用并移除 8 份");
         check(usage->text().contains("共 2 份") && verify.historyLimits().perBook == 7, "未应用本书上限或未刷新用量");
-        window.findChild<QListWidget *>("navigation")->setCurrentRow(3);
+        selectDossierPage(window.findChild<QListWidget *>("navigation"), 3);
         auto *ledger = window.findChild<QTableWidget *>("eventTable");
         check(ledger->isVisible() && ledger->rowCount() == 3 && ledger->item(0, 5)->text() == "获得灵石" &&
                   ledger->horizontalHeaderItem(4)->text() == "结余",
@@ -327,7 +327,7 @@ int main(int argc, char **argv)
             visible<QCheckBox>(sheet()).first()->setChecked(false);
         };
         action("返回资料工作区");
-        window.findChild<QListWidget *>("navigation")->setCurrentRow(3);
+        selectDossierPage(window.findChild<QListWidget *>("navigation"), 3);
         click(window, "记录事件");
         check(!editor->isVisible() && window.findChild<QListWidget *>("navigation")->isVisible(),
               "账本记事跳到了写作模式");
@@ -395,7 +395,7 @@ int main(int argc, char **argv)
               "时间轴缺少并行剧情");
         action("返回资料工作区");
         auto *nav = window.findChild<QListWidget *>("navigation");
-        check(nav->currentRow() == 3 && ledger->isVisible(), "返回资料工作区未回到原先的账本");
+        check(nav->currentItem()->data(Qt::UserRole).toInt() == 3 && ledger->isVisible(), "返回资料工作区未回到原先的账本");
         nav->setCurrentItem(nav->findItems("资源管理", Qt::MatchExactly).first());
         auto *catalog = window.findChild<QTableWidget *>("catalogTable");
         auto pickCatalog = [&](QString text) {
@@ -422,7 +422,7 @@ int main(int argc, char **argv)
         visible<QSpinBox>(window).first()->setValue(3);
         click(window, "创建");
         pickCatalog("上清仙法");
-        nav->setCurrentRow(3);
+        selectDossierPage(nav, 3);
         click(window, "重置");
         auto *filter = visible<QComboBox>(window).first();
         filter->setCurrentText("盘古幡");
@@ -435,7 +435,7 @@ int main(int argc, char **argv)
         click(sheet(), "保存事件");
         verify.supplyEvent(2, 1, SupplyAction::Receive, "蓝瓶", 3, 0, "买药");
         action("返回资料工作区");
-        nav->setCurrentRow(1);
+        selectDossierPage(nav, 1);
         auto *tabs = window.findChild<QTabWidget *>("personTabs");
         check(tabs, "缺少人物档案标签页");
         tabs->setCurrentIndex(1);
@@ -473,7 +473,7 @@ int main(int argc, char **argv)
         check(tableRow(items, "盘古幡") == QStringList{"盘古幡"} && tableRow(skills, "上清仙法").isEmpty(),
               "快照串用人物");
         auto originalRelation = verify.run("INSERT INTO relations(a,b,label) VALUES(1,2,'师傅')").lastInsertId();
-        nav->setCurrentRow(2);
+        selectDossierPage(nav, 2);
         auto *relations = window.findChild<QListWidget *>("relationList");
         relations->setCurrentRow(0);
         auto *label = visible<QLineEdit>(window).first();
@@ -517,7 +517,7 @@ int main(int argc, char **argv)
         click(window, "进入专注写作");
         check(!graphLabels(sheet()).contains("师徒") && graphLabels(sheet()).contains("同门"), "写作关系图没有刷新");
         action("返回资料工作区");
-        nav->setCurrentRow(3);
+        selectDossierPage(nav, 3);
         click(window, "记录事件");
         auto *which = ledgerChapterChoice(window);
         which->setCurrentIndex(1);
