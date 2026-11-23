@@ -1,6 +1,7 @@
 #pragma once
 #include "book.h"
 #include "downward_combo.h"
+#include "inline_files.h"
 #include <QtWidgets>
 
 namespace Clue
@@ -54,11 +55,14 @@ class Foreshadows : public QWidget
     QPlainTextEdit *note = new QPlainTextEdit;
     QFormLayout *form = new QFormLayout;
     QLabel *notice = new QLabel;
+    InlineActions *actions;
+    QPushButton *remove = new QPushButton("删除伏笔");
     QPushButton *anchors[2];
     int selected = 0;
     void showEntry(int id)
     {
         selected = id;
+        remove->setEnabled(id != 0);
         auto q = book->run("SELECT title,status,expected,note FROM foreshadows WHERE id=?", {id});
         q.next();
         title->setText(id ? q.value(0).toString() : QString());
@@ -94,10 +98,16 @@ class Foreshadows : public QWidget
     std::function<void(int, int, int)> jump;
     Foreshadows()
     {
-        auto *layout = new QVBoxLayout(this);
+        auto *home = new QWidget;
+        actions = new InlineActions(home);
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->addWidget(actions);
+        auto *layout = new QVBoxLayout(home);
         layout->addWidget(new QLabel("在这里规划伏笔。在专注写作中选中原文，可标记埋设或回收的位置。"));
         auto *columns = new QHBoxLayout;
         layout->addLayout(columns, 1);
+        list->setObjectName("clueEntryList");
         columns->addWidget(list, 1);
         columns->addLayout(form, 2);
         state->addItems({"待埋设", "已埋设", "已回收", "已放弃"});
@@ -125,11 +135,25 @@ class Foreshadows : public QWidget
                     jump(q.value(0).toInt(), pos, quote.size());
             });
         }
-        auto *actions = new QHBoxLayout;
+        auto *buttons = new QHBoxLayout;
         auto *create = new QPushButton("新建伏笔"), *save = new QPushButton("保存伏笔");
-        actions->addWidget(create);
-        actions->addWidget(save);
-        form->addRow(actions);
+        buttons->addWidget(create);
+        buttons->addWidget(remove);
+        buttons->addWidget(save);
+        form->addRow(buttons);
+        connect(remove, &QPushButton::clicked, this, [this] {
+            const int id = selected;
+            const auto savedTitle = list->currentItem()->data(Qt::UserRole + 1).toString();
+            auto *page = actions->begin("删除伏笔「" + savedTitle + "」？");
+            page->addWidget(new QLabel("同时移除埋设和回收的定位标记，章节原文会保留。"));
+            page->addStretch();
+            actions->buttons("确认删除伏笔", [this, id, savedTitle] {
+                if (book->run("DELETE FROM foreshadows WHERE id=? AND title=?", {id, savedTitle}).numRowsAffected() != 1)
+                    throw std::runtime_error("伏笔已变化，请取消并重新打开伏笔页。");
+                load(*book);
+                notice->setText("伏笔已删除。");
+            });
+        });
         notice->setWordWrap(true);
         notice->setTextFormat(Qt::PlainText);
         layout->addWidget(notice);
@@ -175,6 +199,7 @@ class Foreshadows : public QWidget
     }
     void load(Book &source, int preferred = 0)
     {
+        actions->finish();
         book = &source;
         QSignalBlocker block(list);
         list->clear();
@@ -190,6 +215,7 @@ class Foreshadows : public QWidget
         {
             auto *item = new QListWidgetItem(q.value(2).toString() + " · " + q.value(1).toString(), list);
             item->setData(Qt::UserRole, q.value(0));
+            item->setData(Qt::UserRole + 1, q.value(1));
             if (preferred == q.value(0).toInt())
                 row = list->count() - 1;
         }

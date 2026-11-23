@@ -18,6 +18,7 @@ template <class T> T *shown(QWidget &root, const QString &name)
 }
 static void click(QWidget &root, const QString &name)
 {
+    QApplication::processEvents();
     for (auto *b : root.findChildren<QPushButton *>())
         if (b->isVisible() && b->text() == name && b->isEnabled())
         {
@@ -410,6 +411,66 @@ int main(int argc, char **argv)
         nav->setCurrentItem(menu.first());
         click(w, "查看任务");
         require(shown<QLineEdit>(w, "taskTitle")->isReadOnly() && message(w, "奖励已结算"), "已完成任务未锁定");
+
+        selectDossierPage(nav, Dossier::attributeTemplateIndex);
+        auto *formats = shown<QListWidget>(w, "attributeTemplateList");
+        const int existingFormats = formats->count();
+        require(existingFormats > 0, "资料区未载入已有模板");
+        click(w, "新建模板");
+        auto *formatName = shown<QLineEdit>(w, "attributeTemplateName");
+        auto *formatText = shown<QPlainTextEdit>(w, "attributeTemplatePattern");
+        formatName->setText("修行面板");
+        shown<QComboBox>(w, "templatePreset")->setCurrentText("修行手札");
+        require(formatText->toPlainText().contains("{{已学技能}}"), "管理页预设不可用");
+        click(w, "保存模板");
+        const auto formatId = formats->currentItem()->data(Qt::UserRole);
+        click(w, "进入专注写作");
+        tool("属性面板");
+        auto *writerFormats = shown<QComboBox>(w, "writerAttributeTemplates");
+        writerFormats->setCurrentIndex(writerFormats->findData(formatId));
+        tool("返回资料工作区");
+        formatName->setText("山门名册");
+        formatText->setPlainText("门下弟子：{{姓名}}");
+        click(w, "保存模板");
+        require(formats->count() == existingFormats + 1 && formats->currentItem()->data(Qt::UserRole) == formatId &&
+                    db.value("SELECT title FROM templates WHERE id=?", {formatId}) == "山门名册",
+                "修改名称或内容时新建了另一份模板");
+        click(w, "进入专注写作");
+        require(writerFormats->currentData() == formatId && writerFormats->currentText() == "山门名册" &&
+                    writerFormats->currentData(Qt::UserRole + 1) == "门下弟子：{{姓名}}",
+                "写作中已打开的属性面板未同步模板");
+        tool("返回资料工作区");
+        click(w, "删除模板");
+        click(w, "取消");
+        require(formats->count() == existingFormats + 1, "取消删除后模板消失");
+        click(w, "删除模板");
+        click(w, "确认删除模板");
+        require(!db.value("SELECT 1 FROM templates WHERE id=?", {formatId}).isValid() &&
+                    formats->count() == existingFormats, "未按 ID 删除模板");
+        click(w, "进入专注写作");
+        require(writerFormats->findData(formatId) < 0 && writerFormats->findText("预设 · 修行手札") >= 0,
+                "删除后属性面板仍有失效模板或丢失内置预设");
+
+        tool("伏笔");
+        auto *clueChoice = shown<QComboBox>(w, QString());
+        clueChoice->setCurrentIndex(clueChoice->findData(clue));
+        click(w, "管理本书伏笔");
+        auto *clueList = shown<QListWidget>(w, "clueEntryList");
+        clueList->setCurrentItem(clueList->findItems("灵石来历", Qt::MatchContains).first());
+        const auto chapterBeforeDelete = db.value("SELECT body FROM chapters WHERE id=?", {testChapter});
+        const auto revisionsBeforeDelete = db.value("SELECT count(*) FROM revisions");
+        click(w, "删除伏笔");
+        click(w, "取消");
+        require(db.value("SELECT 1 FROM clue_quotes WHERE clue=?", {clue}).isValid(), "取消删除后伏笔定位丢失");
+        click(w, "删除伏笔");
+        click(w, "确认删除伏笔");
+        require(!db.value("SELECT 1 FROM foreshadows WHERE id=?", {clue}).isValid() &&
+                    !db.value("SELECT 1 FROM clue_quotes WHERE clue=?", {clue}).isValid() &&
+                    db.value("SELECT body FROM chapters WHERE id=?", {testChapter}) == chapterBeforeDelete &&
+                    db.value("SELECT count(*) FROM revisions") == revisionsBeforeDelete,
+                "删除伏笔没有正确清理定位或改动了正文历史");
+        click(w, "进入专注写作");
+        require(clueChoice->findData(clue) < 0 && clueChoice->currentIndex() < 0, "写作侧栏仍然选中已删除的伏笔");
 
         AiSite glm{"zai-messages", "GLM", "https://api.z.ai/api/anthropic", {"glm-5.3"}, "messages-bearer"};
         QJsonObject payload;

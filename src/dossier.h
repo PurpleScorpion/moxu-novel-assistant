@@ -2,6 +2,7 @@
 #include "downward_combo.h"
 #include "book.h"
 #include "character_snapshot.h"
+#include "attribute_templates.h"
 #include "resource_catalog.h"
 #include "event_ledger.h"
 #include "history_settings.h"
@@ -59,6 +60,7 @@ class Dossier : public QWidget
     PlotPage *plots = new PlotPage;
     ResourceCatalog *catalogPage = new ResourceCatalog;
     CharacterSnapshot *snapshot = new CharacterSnapshot;
+    AttributeTemplates *attributeTemplates = new AttributeTemplates;
     int preferredSnapshotChapter = 0;
     QComboBox *from = new DownwardCombo, *to = new DownwardCombo;
     QLineEdit *relation = new QLineEdit;
@@ -259,6 +261,8 @@ class Dossier : public QWidget
             tasks->load(*book, preferredSnapshotChapter);
         else if (page == clueIndex)
             clues->load(*book);
+        else if (page == attributeTemplateIndex)
+            attributeTemplates->load(*book);
         else
             notePages.at(page - 4)->enter(book);
     }
@@ -278,7 +282,8 @@ class Dossier : public QWidget
         summaryIndex,
         studioIndex,
         clueIndex,
-        taskIndex
+        taskIndex,
+        attributeTemplateIndex
     };
     int currentPage() const
     {
@@ -308,6 +313,7 @@ class Dossier : public QWidget
         ledger->resetBook();
         catalogPage->resetBook();
         tasks->resetBook();
+        attributeTemplates->resetBook();
     }
     Dossier(QHash<QString, QString> &keys, std::function<void()> focus, std::function<void()> shelf, std::function<void()> graph,
             std::function<void(QString)> rename, std::function<void(int, const QString &)> appended = {}, std::function<void(int,int,int)> jump = {})
@@ -346,6 +352,7 @@ class Dossier : public QWidget
         link(summaryIndex, "剧情摘要");
         group("人物与剧情");
         link(personIndex, "人物档案");
+        link(attributeTemplateIndex, "属性面板模板");
         link(relationIndex, "人物关系");
         link(plotIndex, "剧情大事");
         link(clueIndex, "伏笔");
@@ -580,6 +587,7 @@ class Dossier : public QWidget
         studioLayout = section("创作台", false);
         section("伏笔")->addWidget(clues,1);
         section("任务管理")->addWidget(tasks,1);
+        section("属性面板模板")->addWidget(attributeTemplates, 1);
         connect(navigation, &QListWidget::currentRowChanged, this, [this](int row) {
             if (!book || row < 0 || !navigation->item(row)->data(Qt::UserRole).isValid())
                 return;
@@ -615,6 +623,8 @@ class Dossier : public QWidget
             notePages.at(details->currentIndex() - 4)->flush();
         if (details->currentIndex() == 1)
             flushPerson();
+        if (details->currentIndex() == attributeTemplateIndex)
+            attributeTemplates->flush();
         if (details->currentIndex() == 0)
         {
             QString n = title->text().trimmed();
@@ -656,6 +666,8 @@ class Dossier : public QWidget
             notePages.at(page - 4)->saveNow();
         else if (page == taskIndex)
             tasks->saveNow();
+        else if (page == attributeTemplateIndex)
+            attributeTemplates->saveNow();
         else if (page == plotIndex)
             plots->saveNow();
         else if (page == summaryIndex && summaryWorkspace)

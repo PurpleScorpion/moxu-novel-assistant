@@ -211,18 +211,35 @@ class Window : public QMainWindow
         save();
         beginSheet("标记伏笔");
         auto *choice = new DownwardCombo;
-        choice->addItem("新建伏笔",0);
-        auto q = book->run("SELECT id,title,status FROM foreshadows ORDER BY id");
-        while(q.next()) choice->addItem(q.value(1).toString()+" · "+q.value(2).toString(),q.value(0));
+        auto refreshChoices = [this, choice] {
+            const auto previous = choice->currentData();
+            auto q = book->run("SELECT id,title,status FROM foreshadows ORDER BY id");
+            QSignalBlocker block(choice);
+            choice->clear();
+            choice->addItem("新建伏笔", 0);
+            while (q.next())
+                choice->addItem(q.value(1).toString() + " · " + q.value(2).toString(), q.value(0));
+            choice->setCurrentIndex(choice->findData(previous));
+        };
+        refreshChoices();
+        choice->setCurrentIndex(0);
         sheet->form->addWidget(choice);
         auto *name = sheet->field("新伏笔名称");
         connect(choice,&QComboBox::currentIndexChanged,name,[=](int i){ name->setEnabled(i==0); });
+        sheet->refreshReferences = [=, this] {
+            refreshChoices();
+            name->setEnabled(choice->currentIndex() == 0);
+            if (choice->currentIndex() < 0)
+                sheet->report("所选伏笔已删除，请重新选择。");
+        };
         const int start=insertion.selectionStart();
         QString quote=insertion.selectedText().replace(QChar::ParagraphSeparator,'\n');
         const auto version=book->value("SELECT body_version FROM chapters WHERE id=?",{chapter}).toLongLong();
         for(bool resolved:{false,true})
         {
             auto *action=button(sheet->form,resolved ? "将选区标记为回收" : "将选区标记为埋设",[=,this] {
+                if (choice->currentIndex() < 0)
+                    throw std::runtime_error("请先选择伏笔。");
                 Clue::mark(*book,choice->currentData().toInt(),name->text(),resolved,chapter,version,start,quote);
                 closeSheet(); status->confirm("伏笔标记");
             });
@@ -800,19 +817,34 @@ class Window : public QMainWindow
             stack->addWidget(detail);
             stack->setCurrentWidget(detail);
         });
-        auto *templates = sheet->choice("输出模板", book->run("SELECT id,title FROM templates ORDER BY id"));
-        for (const auto &[name, pattern] : TemplatePresets::attributes())
-        {
-            templates->addItem("预设 · " + name);
-            templates->setItemData(templates->count() - 1, pattern, Qt::UserRole + 1);
-        }
+        auto *templates = new DownwardCombo;
+        templates->setObjectName("writerAttributeTemplates");
+        sheet->form->addWidget(new QLabel("输出模板"));
+        sheet->form->addWidget(templates);
+        auto loadTemplates = [this, templates] {
+            const auto previous = templates->currentData();
+            auto q = book->run("SELECT id,title,pattern,COUNT(*) OVER(PARTITION BY title) FROM templates ORDER BY id");
+            QSignalBlocker block(templates);
+            templates->clear();
+            while (q.next())
+            {
+                auto label = q.value(1).toString();
+                if (q.value(3).toInt() > 1)
+                    label += " · #" + q.value(0).toString();
+                templates->addItem(label, q.value(0));
+                templates->setItemData(templates->count() - 1, q.value(2), Qt::UserRole + 1);
+            }
+            for (const auto &[name, pattern] : TemplatePresets::attributes())
+            {
+                templates->addItem("预设 · " + name, "preset/" + name);
+                templates->setItemData(templates->count() - 1, pattern, Qt::UserRole + 1);
+            }
+            templates->setCurrentIndex(qMax(0, templates->findData(previous)));
+        };
+        loadTemplates();
         if (initialTemplate)
             templates->setCurrentIndex(templates->findData(initialTemplate));
-        auto selectedPattern = [this, templates] {
-            const auto preset = templates->currentData(Qt::UserRole + 1);
-            return preset.isValid() ? preset.toString() :
-                book->value("SELECT pattern FROM templates WHERE id=?", {templates->currentData()}).toString();
-        };
+        auto selectedPattern = [templates] { return templates->currentData(Qt::UserRole + 1).toString(); };
         button(sheet->form, "以此格式新建模板", [=, this] {
             newTemplate(selectedPattern(), people->currentData().toInt());
         });
@@ -827,6 +859,23 @@ class Window : public QMainWindow
         connect(people, &QComboBox::currentIndexChanged, sheet, refresh);
         connect(templates, &QComboBox::currentIndexChanged, sheet, refresh);
         refresh();
+        auto *useLatest = new QPushButton("按当前模板刷新预览");
+        sheet->form->addWidget(useLatest);
+        useLatest->hide();
+        connect(templates, &QComboBox::currentIndexChanged, useLatest, &QWidget::hide);
+        connect(people, &QComboBox::currentIndexChanged, useLatest, &QWidget::hide);
+        connect(useLatest, &QPushButton::clicked, sheet, [=] { refresh(); useLatest->hide(); });
+        sheet->refreshReferences = [=] {
+            const auto previous = templates->currentData();
+            const auto oldPattern = selectedPattern();
+            loadTemplates();
+            if (templates->currentData() == previous && selectedPattern() == oldPattern)
+                return;
+            if (preview->document()->isModified())
+                useLatest->show();
+            else
+                refresh();
+        };
         button(sheet->form, "插入属性面板", [=, this] {
             if (!people->count() || !templates->count() || preview->toPlainText().isEmpty())
                 throw std::runtime_error("请先选择人物和模板，并填写插入内容。");
@@ -1356,8 +1405,12 @@ class Window : public QMainWindow
             refreshChapterMoves();
             setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
             if (sheet)
+            {
                 if (auto *view = sheet->findChild<QGraphicsView *>("writerRelationGraph"))
                     drawRelations(*view->scene());
+                if (sheet->refreshReferences)
+                    sheet->refreshReferences();
+            }
             pages->setCurrentWidget(writer);
             tools->show();
             statusBar()->show();

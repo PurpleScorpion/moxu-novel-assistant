@@ -9,6 +9,7 @@ class WriterSheet : public QScrollArea
     QStackedWidget *pages = new QStackedWidget;
     QVBoxLayout *form;
     QLabel *message;
+    std::function<void()> refreshReferences;
     WriterSheet(const QString &title, std::function<void()> close)
     {
         setObjectName("writerSheet");
