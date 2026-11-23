@@ -5,6 +5,7 @@
 #include "event_form.h"
 #include "writer_sheet.h"
 #include "writer_tasks.h"
+#include "template_presets.h"
 #include "writing_assistant.h"
 #include <QtWidgets>
 #include <cmath>
@@ -719,9 +720,8 @@ class Window : public QMainWindow
             closeSheet();
         })->setObjectName("primary");
     }
-    QString renderPanel(int id, int t)
+    QString renderPanel(int id, const QString &pattern)
     {
-        auto pattern = book->value("SELECT pattern FROM templates WHERE id=?", {t}).toString();
         auto q = book->run("SELECT name,attributes FROM people WHERE id=?", {id});
         q.next();
         const auto resourceValues = book->resourceBalances(id, chapter);
@@ -774,10 +774,12 @@ class Window : public QMainWindow
         result += pattern.mid(start);
         return result;
     }
-    void panel()
+    void panel(int initialPerson = 0, int initialTemplate = 0)
     {
         beginSheet("属性面板");
         auto *people = personChoice();
+        if (initialPerson)
+            people->setCurrentIndex(people->findData(initialPerson));
         button(sheet->form, "查看章节快照", [this, people] {
             auto *stack = sheet->pages;
             auto *detail = new QWidget;
@@ -799,11 +801,26 @@ class Window : public QMainWindow
             stack->setCurrentWidget(detail);
         });
         auto *templates = sheet->choice("输出模板", book->run("SELECT id,title FROM templates ORDER BY id"));
+        for (const auto &[name, pattern] : TemplatePresets::attributes())
+        {
+            templates->addItem("预设 · " + name);
+            templates->setItemData(templates->count() - 1, pattern, Qt::UserRole + 1);
+        }
+        if (initialTemplate)
+            templates->setCurrentIndex(templates->findData(initialTemplate));
+        auto selectedPattern = [this, templates] {
+            const auto preset = templates->currentData(Qt::UserRole + 1);
+            return preset.isValid() ? preset.toString() :
+                book->value("SELECT pattern FROM templates WHERE id=?", {templates->currentData()}).toString();
+        };
+        button(sheet->form, "以此格式新建模板", [=, this] {
+            newTemplate(selectedPattern(), people->currentData().toInt());
+        });
         auto *preview = sheet->textArea("预览（可直接编辑）");
         auto refresh = [=, this] {
             guard([&] {
                 preview->setPlainText(people->count() && templates->count()
-                                          ? renderPanel(people->currentData().toInt(), templates->currentData().toInt())
+                                          ? renderPanel(people->currentData().toInt(), selectedPattern())
                                           : QString());
             });
         };
@@ -981,19 +998,26 @@ class Window : public QMainWindow
         });
     }
 
-    void newTemplate()
+    void newTemplate(const QString &source = {}, int returnPerson = 0)
     {
         beginSheet("新建输出模板");
         auto *name = sheet->field("模板名称");
         auto *pattern =
             sheet->textArea("模板内容（如 {{姓名}}、{{灵石}}、{{持有道具}}、{{血瓶.数量}}、{{上清仙法.等级}}）");
-        pattern->setPlainText("【{{姓名}}】\n{{属性}}");
+        auto *presets = new TemplatePresets::Picker(pattern);
+        const auto choices = TemplatePresets::attributes();
+        presets->setChoices(choices);
+        sheet->form->insertWidget(sheet->form->indexOf(name) + 1, presets);
+        pattern->setPlainText(source.isEmpty() ? choices.first().second : source);
         button(sheet->form, "保存模板", [=, this] {
             if (name->text().trimmed().isEmpty() || pattern->toPlainText().isEmpty())
                 throw std::runtime_error("请填写模板名称和内容。");
-            book->run("INSERT INTO templates(title,pattern) VALUES(?,?)",
-                      {name->text().trimmed(), pattern->toPlainText()});
-            closeSheet();
+            const auto saved = book->run("INSERT INTO templates(title,pattern) VALUES(?,?)",
+                                         {name->text().trimmed(), pattern->toPlainText()}).lastInsertId().toInt();
+            if (returnPerson)
+                panel(returnPerson, saved);
+            else
+                closeSheet();
             status->setText("模板已保存");
         });
     }

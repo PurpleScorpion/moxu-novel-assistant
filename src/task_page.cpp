@@ -1,4 +1,5 @@
 #include "task_page.h"
+#include "template_presets.h"
 #include "interface.h"
 #include "resource_catalog.h"
 #include <limits>
@@ -56,6 +57,14 @@ TaskPage::TaskPage()
     summary->setWordWrap(true);
     bar->addWidget(summary, 1);
     open = new QPushButton("查看任务");
+    auto *templates = new QPushButton("提示模板");
+    bar->addWidget(templates);
+    connect(templates, &QPushButton::clicked, this, [this] {
+        invoke([&] {
+            reloadPatterns();
+            pages->setCurrentWidget(templatePage);
+        });
+    });
     auto *create = new QPushButton("新建任务");
     create->setObjectName("primary");
     bar->addWidget(open);
@@ -190,6 +199,70 @@ TaskPage::TaskPage()
     finishLayout->addWidget(finish);
     form->addWidget(settlement);
     connect(finish, &QPushButton::clicked, this, [this] { invoke([&] { save(true); }); });
+
+    pages->addWidget(templatePage);
+    auto *settings = new QVBoxLayout(templatePage);
+    settings->setContentsMargins(0, 0, 0, 0);
+    auto *header = new QHBoxLayout;
+    settings->addLayout(header);
+    header->addWidget(sectionLabel("本书任务提示模板"), 1);
+    auto *backToList = new QPushButton("返回任务列表");
+    header->addWidget(backToList);
+    connect(backToList, &QPushButton::clicked, this, [this] { invoke([&] { refreshList(task.id); }); });
+    templateTabs->setObjectName("taskTemplateTabs");
+    settings->addWidget(templateTabs, 1);
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        auto *tab = new QWidget;
+        auto *columns = new QHBoxLayout(tab);
+        auto *input = new TemplatePresets::TaskInput;
+        input->presets->setChoices(TemplatePresets::task(mode == 1));
+        patterns[mode] = input->text;
+        columns->addWidget(input, 3);
+        auto *sample = new QVBoxLayout;
+        columns->addLayout(sample, 2);
+        sample->addWidget(new QLabel("插入效果 · 示例任务"));
+        auto *preview = new QPlainTextEdit;
+        preview->setReadOnly(true);
+        preview->setObjectName("taskExamplePreview");
+        sample->addWidget(preview, 1);
+        connect(input->text, &QPlainTextEdit::textChanged, this, [input, preview] {
+            preview->setPlainText(TemplatePresets::taskExample(input->text->toPlainText()));
+        });
+        templateTabs->addTab(tab, mode == 0 ? "发布提示" : "完成提示");
+    }
+    auto *saveFormats = new QPushButton("保存模板");
+    saveFormats->setObjectName("primary");
+    settings->addWidget(saveFormats, 0, Qt::AlignRight);
+    connect(saveFormats, &QPushButton::clicked, this, [this] { saveNow(); });
+}
+
+void TaskPage::reloadPatterns()
+{
+    for (int mode = 0; mode < 2; ++mode)
+        if (patterns[mode]->toPlainText() == savedPatterns[mode])
+        {
+            savedPatterns[mode] = StoryTasks::messagePattern(*book, mode == 1);
+            if (patterns[mode]->toPlainText() != savedPatterns[mode])
+                patterns[mode]->setPlainText(savedPatterns[mode]);
+        }
+}
+void TaskPage::savePatterns()
+{
+    book->atomic([&] {
+        for (int mode = 0; mode < 2; ++mode)
+            if (patterns[mode]->toPlainText() != savedPatterns[mode])
+                StoryTasks::saveMessagePattern(*book, mode == 1, patterns[mode]->toPlainText());
+    });
+    for (int mode = 0; mode < 2; ++mode)
+        savedPatterns[mode] = patterns[mode]->toPlainText();
+    message->setText("本书提示模板已保存。");
+}
+void TaskPage::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (book && pages->currentWidget() == templatePage)
+        invoke([&] { reloadPatterns(); });
 }
 
 void TaskPage::invoke(const std::function<void()> &action)
@@ -207,6 +280,12 @@ void TaskPage::invoke(const std::function<void()> &action)
 void TaskPage::resetBook()
 {
     pages->setCurrentIndex(0);
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        patterns[mode]->setPlainText({});
+        savedPatterns[mode].clear();
+    }
+    templateTabs->setCurrentIndex(0);
     book = nullptr;
     task = {};
     catalog.clear();
@@ -222,6 +301,8 @@ void TaskPage::load(Book &source, int currentChapter)
     if (pages->currentIndex() == 1)
         reloadChoices(person->currentData().toInt(), published->currentData().toInt(),
                       completed->currentData().toInt());
+    else if (pages->currentWidget() == templatePage)
+        reloadPatterns();
     else
         refreshList(task.id);
 }
@@ -345,6 +426,8 @@ void TaskPage::save(bool finish)
 }
 void TaskPage::saveNow()
 {
-    if (pages->currentIndex() == 1 && !task.completed)
+    if (pages->currentWidget() == templatePage)
+        invoke([&] { savePatterns(); });
+    else if (pages->currentIndex() == 1 && !task.completed)
         invoke([&] { save(false); });
 }

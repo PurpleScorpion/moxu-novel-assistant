@@ -252,9 +252,28 @@ int main(int argc, char **argv)
         check(!visible<QGraphicsView>(sheet()).isEmpty(), "关系图未嵌入");
         action("资料与导出");
         click(sheet(), "新建输出模板");
+        auto *presetPicker = sheet().findChild<QComboBox *>("templatePreset");
+        presetPicker->setCurrentText("冒险者背包");
+        auto *panelFormat = visible<QPlainTextEdit>(sheet()).first();
+        check(panelFormat->toPlainText().contains("{{血瓶.数量}}"), "属性预设未填入模板编辑框");
+        panelFormat->appendPlainText("门派专用");
         visible<QLineEdit>(sheet()).first()->setText("门派面板");
         click(sheet(), "保存模板");
-        check(verify.value("SELECT count(*) FROM templates WHERE title='门派面板'").toInt() == 1, "模板未保存");
+        check(verify.value("SELECT pattern FROM templates WHERE title='门派面板'").toString().endsWith("门派专用"),
+              "属性预设自定义修改未保存");
+        action("属性面板");
+        auto panelChoices = visible<QComboBox>(sheet());
+        panelChoices.first()->setCurrentIndex(1);
+        const auto actorName = panelChoices.first()->currentText();
+        panelChoices.last()->setCurrentText("预设 · 系统状态栏");
+        check(preview()->toPlainText().startsWith("宿主：" + actorName), "直接使用预设未带入人物");
+        click(sheet(), "以此格式新建模板");
+        check(visible<QPlainTextEdit>(sheet()).first()->toPlainText().startsWith("宿主：{{姓名}}"), "另存格式丢失字段");
+        visible<QLineEdit>(sheet()).first()->setText("我的系统");
+        click(sheet(), "保存模板");
+        panelChoices = visible<QComboBox>(sheet());
+        check(panelChoices.first()->currentText() == actorName && panelChoices.last()->currentText() == "我的系统",
+              "保存自定义格式后未返回原人物和新模板");
         action("资料与导出");
         for (auto *button : visible<QPushButton>(sheet()))
             check(button->text() != "整书基础校对", "资料与导出中仍有已移除的校对入口");

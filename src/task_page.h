@@ -10,6 +10,10 @@ class TaskPage : public QWidget
     int preferredChapter = 0;
     QStackedWidget *pages = new QStackedWidget;
     QWidget *listPage = new QWidget, *formPage = new QWidget;
+    QWidget *templatePage = new QWidget;
+    QTabWidget *templateTabs = new QTabWidget;
+    QPlainTextEdit *patterns[2]{};
+    QString savedPatterns[2];
     QTableWidget *list = new QTableWidget, *rewards = new QTableWidget;
     QLineEdit *title = new QLineEdit;
     QPlainTextEdit *description = new QPlainTextEdit;
@@ -24,6 +28,9 @@ class TaskPage : public QWidget
     void showForm(int id);
     void showRewards();
     void save(bool finish);
+    void reloadPatterns();
+    void savePatterns();
+    void showEvent(QShowEvent *event) override;
     void invoke(const std::function<void()> &action);
 
   public:

@@ -1,5 +1,6 @@
 #include "writer_tasks.h"
 #include "resource_catalog.h"
+#include "template_presets.h"
 #include <limits>
 
 namespace
@@ -13,7 +14,8 @@ class WriterTasks : public QWidget
     StoryTask draft, selected;
     QTabWidget *tabs = new QTabWidget;
     QStackedWidget *pages = new QStackedWidget;
-    QPlainTextEdit *pattern = new QPlainTextEdit, *preview = new QPlainTextEdit;
+    TemplatePresets::TaskInput *patternInput = new TemplatePresets::TaskInput;
+    QPlainTextEdit *pattern = patternInput->text, *preview = new QPlainTextEdit;
     QPushButton *editPattern = new QPushButton("编辑模板");
     QLabel *patternHeading = new QLabel, *previewHeading = new QLabel("正文预览");
     QString patterns[2], selectedActor, rendered;
@@ -54,12 +56,8 @@ class WriterTasks : public QWidget
         }
         else if (!selected.id && pages->currentIndex() == 1)
         {
-            StoryTask example;
-            example.title = "寻回玉简";
-            example.instructions = "将玉简交还师门";
-            example.rewards.append({{"numeric", "积分"}, 100});
             previewHeading->setText("模板预览 · 示例任务");
-            rendered = StoryTasks::manuscriptText(example, "主角", format);
+            rendered = TemplatePresets::taskExample(format);
         }
         else
             rendered = selected.id ? StoryTasks::manuscriptText(selected, selectedActor, format) : QString();
@@ -122,6 +120,22 @@ class WriterTasks : public QWidget
         if (rewards->count())
             rewards->setCurrentRow(rewards->count() - 1);
         refreshPreview();
+    }
+
+    void showEvent(QShowEvent *event) override
+    {
+        QWidget::showEvent(event);
+        report([&] {
+            const int mode = tabs->currentIndex();
+            const bool followSaved = pages->currentIndex() == 1 && pattern->toPlainText() == patterns[mode];
+            patterns[0] = StoryTasks::messagePattern(book, false);
+            patterns[1] = StoryTasks::messagePattern(book, true);
+            if (followSaved && pattern->toPlainText() != patterns[mode])
+                pattern->setPlainText(patterns[mode]);
+            refreshPreview();
+            if (mode == 0 && !actor->count())
+                notice->setText("本书尚无人物，请先建立承接人的档案。");
+        });
     }
 
   public:
@@ -216,13 +230,7 @@ class WriterTasks : public QWidget
         settingsLayout->setContentsMargins(0, 0, 0, 0);
         patternHeading->setObjectName("sectionTitle");
         settingsLayout->addWidget(patternHeading);
-        auto *help = new QLabel("可用字段：{{任务名}}、{{承接人}}、{{完成条件}}、{{奖励}}。"
-                                "{{条件行}} 会在填写了条件时加上「完成条件：」并换行。");
-        help->setWordWrap(true);
-        help->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        settingsLayout->addWidget(help);
-        pattern->setObjectName("taskMessagePattern");
-        settingsLayout->addWidget(pattern, 1);
+        settingsLayout->addWidget(patternInput, 1);
         auto *reset = new QPushButton("使用默认格式"), *cancel = new QPushButton("取消"),
              *savePattern = new QPushButton("保存模板");
         auto *buttons = new QHBoxLayout;
@@ -244,6 +252,7 @@ class WriterTasks : public QWidget
         connect(editPattern, &QPushButton::clicked, this, [this] {
             const int mode = tabs->currentIndex();
             patternHeading->setText(mode == 0 ? "本书 · 发布提示模板" : "本书 · 完成提示模板");
+            patternInput->presets->setChoices(TemplatePresets::task(mode == 1));
             pattern->setPlainText(patterns[mode]);
             notice->hide();
             setEditing(true);

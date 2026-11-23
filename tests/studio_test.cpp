@@ -343,6 +343,41 @@ int main(int argc, char **argv)
                     nav->item(nav->row(menu.first()) + 2)->text() == "事件账本",
                 "任务与资源菜单顺序错误");
         nav->setCurrentItem(menu.first());
+        click(w, "提示模板");
+        auto *templateTabs = shown<QTabWidget>(w, "taskTemplateTabs");
+        auto *format = shown<QPlainTextEdit>(w, "taskMessagePattern");
+        auto *preset = shown<QComboBox>(w, "templatePreset");
+        preset->setCurrentText("门派传令");
+        require(format->toPlainText().contains("{{任务名}}") &&
+                    shown<QPlainTextEdit>(w, "taskExamplePreview")->toPlainText().contains("寻回玉简"),
+                "发布预设未填入可编辑模板或未显示示例");
+        format->setPlainText("发布｜{{任务名}}");
+        templateTabs->setCurrentIndex(1);
+        shown<QComboBox>(w, "templatePreset")->setCurrentText("游戏提示");
+        const auto finished = shown<QPlainTextEdit>(w, "taskMessagePattern")->toPlainText();
+        templateTabs->setCurrentIndex(0);
+        require(format->toPlainText() == "发布｜{{任务名}}" &&
+                    StoryTasks::messagePattern(db, false) == StoryTasks::defaultMessagePattern(false),
+                "切换模板时丢失草稿或提前写入");
+        click(w, "保存模板");
+        require(StoryTasks::messagePattern(db, true) == finished, "完成预设未保存");
+        click(w, "进入专注写作");
+        tool("任务");
+        shown<QLineEdit>(w, "writerTaskTitle")->setText("回山");
+        auto *taskPreview = shown<QPlainTextEdit>(w, "taskMessagePreview");
+        require(taskPreview->toPlainText() == "发布｜回山", "写作侧栏未读取基础资料模板");
+        tool("返回资料工作区");
+        format->setPlainText("委托｜{{任务名}}");
+        click(w, "保存模板");
+        click(w, "进入专注写作");
+        require(taskPreview->isVisible() && taskPreview->toPlainText() == "委托｜回山", "已打开的侧栏未同步模板");
+        click(w, "编辑模板");
+        shown<QComboBox>(w, "templatePreset")->setCurrentText("委托公告");
+        auto writerFormat = shown<QPlainTextEdit>(w, "taskMessagePattern")->toPlainText();
+        click(w, "保存模板");
+        tool("返回资料工作区");
+        require(format->isVisible() && format->toPlainText() == writerFormat, "资料区未同步侧栏的修改");
+        click(w, "返回任务列表");
         click(w, "新建任务");
         shown<QLineEdit>(w, "taskTitle")->setText("初入昆仑");
         shown<QComboBox>(w, "taskPerson")->setCurrentIndex(shown<QComboBox>(w, "taskPerson")->findData(person));
