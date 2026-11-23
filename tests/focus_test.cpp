@@ -557,15 +557,33 @@ int main(int argc, char **argv)
         taskResource->setCurrentText("数值资源 · 积分");
         sheet().findChild<QSpinBox *>("writerTaskQuantity")->setValue(42);
         click(sheet(), "添加奖励");
+        auto previewText = [&] { return sheet().findChild<QPlainTextEdit *>("taskMessagePreview")->toPlainText(); };
+        check(previewText().contains("任务奖励：积分 × 42"), "添加奖励未更新发布预览");
+        click(sheet(), "编辑模板");
+        auto *pattern = sheet().findChild<QPlainTextEdit *>("taskMessagePattern");
+        pattern->setPlainText("  ");
+        click(sheet(), "保存模板");
+        check(pattern->isVisible() && StoryTasks::messagePattern(verify, false) == StoryTasks::defaultMessagePattern(false),
+              "空白模板覆盖了已保存的格式");
+        pattern->setPlainText("【悬赏】{{承接人}} · {{任务名}}\n{{完成条件}}\n酬劳：{{奖励}}");
+        const QString publishNotice = "【悬赏】林澈 · 寻回玉简\n将玉简带回山门。\n酬劳：积分 × 42";
+        check(previewText() == publishNotice, "编辑发布模板未实时预览");
+        click(sheet(), "保存模板");
+        check(previewText() == publishNotice, "保存模板丢失发布草稿");
         auto *insertTask = sheet().findChild<QCheckBox *>("writerTaskInsert");
         check(!insertTask->isChecked(), "发布任务默认插入正文");
         insertTask->setChecked(true);
         const auto beforePoints = verify.balance(1, "积分", 2);
+        const auto savedFormat = StoryTasks::messagePattern(verify, false);
+        StoryTasks::saveMessagePattern(verify, false, "临时修改");
+        click(sheet(), "在本章发布任务");
+        check(editor->toPlainText() == original &&
+                  !verify.value("SELECT 1 FROM story_tasks WHERE title='寻回玉简'").isValid(),
+              "预览过期后仍发布任务或插入正文");
+        StoryTasks::saveMessagePattern(verify, false, savedFormat);
         click(sheet(), "在本章发布任务");
         const int publishedId =
             verify.value("SELECT id FROM story_tasks WHERE title='寻回玉简' AND published=1").toInt();
-        const auto publishedTask = StoryTasks::get(verify, publishedId);
-        const auto publishNotice = StoryTasks::manuscriptText(publishedTask, "林澈", false);
         check(editor->toPlainText() == original.left(3) + "\n" + publishNotice + "\n" + original.mid(3) &&
                   verify.value("SELECT body FROM chapters WHERE id=1") == editor->toPlainText() &&
                   publishNotice.contains("将玉简带回山门。") && publishNotice.contains("积分 × 42") &&
@@ -577,6 +595,17 @@ int main(int argc, char **argv)
         sheet().findChild<QTabWidget *>()->setCurrentIndex(1);
         auto *choices = sheet().findChild<QComboBox *>("writerTaskPending");
         choices->setCurrentIndex(choices->findData(publishedId));
+        check(previewText().contains("【系统任务完成】寻回玉简"), "发布模板影响完成模板");
+        click(sheet(), "编辑模板");
+        pattern = sheet().findChild<QPlainTextEdit *>("taskMessagePattern");
+        pattern->setPlainText("「{{任务名}}」已交付。\n{{承接人}}获得{{奖励}}。");
+        click(sheet(), "保存模板");
+        const QString finishNotice = "「寻回玉简」已交付。\n林澈获得积分 × 42。";
+        check(previewText() == finishNotice, "完成预览未填入当前任务");
+        click(sheet(), "编辑模板");
+        click(sheet(), "使用默认格式");
+        click(sheet(), "取消");
+        check(previewText() == finishNotice, "取消编辑影响已保存的完成模板");
         auto secondBody = editor->toPlainText();
         insertTask = sheet().findChild<QCheckBox *>("writerTaskInsert");
         check(!insertTask->isChecked(), "结算默认插入正文");
@@ -589,8 +618,7 @@ int main(int argc, char **argv)
               "正文写入失败未回滚任务和奖励");
         verify.run("DROP TRIGGER refuse_task_text");
         click(sheet(), "完成任务并发奖");
-        check(editor->toPlainText().contains("【系统任务完成】寻回玉简") &&
-                  editor->toPlainText().contains("已发奖励：积分 × 42") &&
+        check(editor->toPlainText().contains(finishNotice) &&
                   verify.value("SELECT body FROM chapters WHERE id=2") == editor->toPlainText() &&
                   verify.balance(1, "积分", 2) == beforePoints + 42 &&
                   StoryTasks::get(verify, publishedId).completed == 2,

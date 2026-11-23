@@ -183,6 +183,8 @@ Book::Book(const QString &path, const QString &newTitle)
             "FROM supplies s JOIN events e ON e.id=s.event_id UNION ALL "
             "SELECT s.name,e.id,e.chapter,s.recipient,-s.change FROM supplies s JOIN events e ON e.id=s.event_id "
             "WHERE s.recipient IS NOT NULL");
+        run("CREATE TABLE IF NOT EXISTS task_message_templates(completed INTEGER PRIMARY KEY CHECK(completed IN (0,1)),"
+            "pattern TEXT NOT NULL)");
         run("CREATE TABLE IF NOT EXISTS story_tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,"
             "instructions TEXT NOT NULL,person INTEGER NOT NULL REFERENCES people(id),"
             "published INTEGER NOT NULL REFERENCES chapters(id),completed INTEGER REFERENCES chapters(id),"

@@ -286,8 +286,28 @@ int main(int argc, char **argv)
             legacy.insertChapter("归来");
             legacy.run("DROP TABLE task_rewards");
             legacy.run("DROP TABLE story_tasks");
+            legacy.run("DROP TABLE task_message_templates");
         }
         Book tasks(taskFile);
+        const QString custom = "「{{任务名}}」归属{{承接人}}\n{{奖励}}";
+        const auto defaultPublish = StoryTasks::defaultMessagePattern(false);
+        StoryTask sample;
+        sample.title = "获取{{奖励}}";
+        if (StoryTasks::manuscriptText(sample, "甲", StoryTasks::messagePattern(tasks, false)) !=
+                "【系统任务发布】获取{{奖励}}\n承接人：甲\n任务奖励：无")
+            return 41;
+        StoryTasks::saveMessagePattern(tasks, false, custom);
+        {
+            Book opened(taskFile);
+            if (StoryTasks::messagePattern(opened, false) != custom ||
+                StoryTasks::messagePattern(opened, true) != StoryTasks::defaultMessagePattern(true) ||
+                StoryTasks::messagePattern(other, false) != defaultPublish ||
+                StoryTasks::manuscriptText(sample, "甲", custom) != "「获取{{奖励}}」归属甲\n无")
+                return 42;
+            StoryTasks::saveMessagePattern(opened, false, defaultPublish);
+        }
+        if (StoryTasks::messagePattern(tasks, false) != defaultPublish)
+            return 43;
         tasks.saveCatalogEntry({"item", "玉符"});
         tasks.saveCatalogEntry({"supply", "丹药"});
         tasks.saveCatalogEntry({"skill", "遁法", "入门", "一日", 2});

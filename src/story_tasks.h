@@ -18,7 +18,10 @@ namespace StoryTasks
 {
 void addReward(QList<TaskReward> &rewards, const CatalogEntry &resource, int quantity);
 QString rewardText(const TaskReward &reward);
-QString manuscriptText(const StoryTask &task, const QString &actor, bool completed);
+QString defaultMessagePattern(bool completed);
+QString messagePattern(Book &book, bool completed);
+void saveMessagePattern(Book &book, bool completed, const QString &pattern);
+QString manuscriptText(const StoryTask &task, const QString &actor, const QString &pattern);
 StoryTask get(Book &book, int id);
 int save(Book &book, const StoryTask &task);
 void complete(Book &book, int id, int revision, int chapter);

@@ -12,6 +12,11 @@ class WriterTasks : public QWidget
     QList<CatalogEntry> catalog;
     StoryTask draft, selected;
     QTabWidget *tabs = new QTabWidget;
+    QStackedWidget *pages = new QStackedWidget;
+    QPlainTextEdit *pattern = new QPlainTextEdit, *preview = new QPlainTextEdit;
+    QPushButton *editPattern = new QPushButton("编辑模板");
+    QLabel *patternHeading = new QLabel, *previewHeading = new QLabel("正文预览");
+    QString patterns[2], selectedActor, rendered;
     QLineEdit *title = new QLineEdit;
     QPlainTextEdit *conditions = new QPlainTextEdit;
     DownwardCombo *actor = new DownwardCombo, *resource = new DownwardCombo, *pending = new DownwardCombo;
@@ -34,9 +39,44 @@ class WriterTasks : public QWidget
         }
         notice->setVisible(!notice->text().isEmpty());
     }
+    void refreshPreview()
+    {
+        const int mode = tabs->currentIndex();
+        const QString format = pages->currentIndex() == 1 ? pattern->toPlainText() : patterns[mode];
+        previewHeading->setText("正文预览");
+        if (mode == 0)
+        {
+            draft.title = title->text();
+            draft.instructions = conditions->toPlainText();
+            draft.person = actor->currentData().toInt();
+            draft.published = chapter;
+            rendered = StoryTasks::manuscriptText(draft, actor->currentData(Qt::UserRole + 1).toString(), format);
+        }
+        else if (!selected.id && pages->currentIndex() == 1)
+        {
+            StoryTask example;
+            example.title = "寻回玉简";
+            example.instructions = "将玉简交还师门";
+            example.rewards.append({{"numeric", "积分"}, 100});
+            previewHeading->setText("模板预览 · 示例任务");
+            rendered = StoryTasks::manuscriptText(example, "主角", format);
+        }
+        else
+            rendered = selected.id ? StoryTasks::manuscriptText(selected, selectedActor, format) : QString();
+        preview->setPlainText(rendered);
+    }
+    void setEditing(bool editing)
+    {
+        pages->setCurrentIndex(editing ? 1 : 0);
+        insert->setVisible(!editing);
+        submit->setVisible(!editing);
+        editPattern->setVisible(!editing);
+        refreshPreview();
+    }
     void showSelection()
     {
         selected = {};
+        refreshPreview();
         summary->clear();
         submit->setEnabled(false);
         if (pending->currentIndex() < 0)
@@ -50,9 +90,11 @@ class WriterTasks : public QWidget
             summary->setText("任务已完成。");
             return;
         }
-        const auto name = book.value("SELECT name FROM people WHERE id=?", {task.person}).toString();
-        summary->setText(StoryTasks::manuscriptText(task, name, false).section('\n', 1));
+        selectedActor = book.value("SELECT name FROM people WHERE id=?", {task.person}).toString();
+        summary->setText(
+            StoryTasks::manuscriptText(task, selectedActor, StoryTasks::defaultMessagePattern(false)).section('\n', 1));
         selected = task;
+        refreshPreview();
         submit->setEnabled(true);
     }
     void refreshPending()
@@ -79,6 +121,7 @@ class WriterTasks : public QWidget
             rewards->addItem(StoryTasks::rewardText(reward));
         if (rewards->count())
             rewards->setCurrentRow(rewards->count() - 1);
+        refreshPreview();
     }
 
   public:
@@ -87,7 +130,10 @@ class WriterTasks : public QWidget
     {
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
-        layout->addWidget(tabs);
+        patterns[0] = StoryTasks::messagePattern(book, false);
+        patterns[1] = StoryTasks::messagePattern(book, true);
+        layout->addWidget(pages);
+        pages->addWidget(tabs);
         auto *publish = new QWidget;
         auto *form = new QVBoxLayout(publish);
         title->setObjectName("writerTaskTitle");
@@ -100,6 +146,7 @@ class WriterTasks : public QWidget
             if (people.value(2).toInt() > 1)
                 name += " · #" + people.value(0).toString();
             actor->addItem(name, people.value(0));
+            actor->setItemData(actor->count() - 1, people.value(1), Qt::UserRole + 1);
         }
         auto *fields = new QFormLayout;
         fields->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -163,6 +210,64 @@ class WriterTasks : public QWidget
         summary->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         detail->addWidget(summary, 1);
         tabs->addTab(finish, "完成任务");
+        auto *settings = new QWidget;
+        pages->addWidget(settings);
+        auto *settingsLayout = new QVBoxLayout(settings);
+        settingsLayout->setContentsMargins(0, 0, 0, 0);
+        patternHeading->setObjectName("sectionTitle");
+        settingsLayout->addWidget(patternHeading);
+        auto *help = new QLabel("可用字段：{{任务名}}、{{承接人}}、{{完成条件}}、{{奖励}}。"
+                                "{{条件行}} 会在填写了条件时加上「完成条件：」并换行。");
+        help->setWordWrap(true);
+        help->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        settingsLayout->addWidget(help);
+        pattern->setObjectName("taskMessagePattern");
+        settingsLayout->addWidget(pattern, 1);
+        auto *reset = new QPushButton("使用默认格式"), *cancel = new QPushButton("取消"),
+             *savePattern = new QPushButton("保存模板");
+        auto *buttons = new QHBoxLayout;
+        settingsLayout->addLayout(buttons);
+        buttons->addWidget(reset);
+        buttons->addStretch();
+        buttons->addWidget(cancel);
+        buttons->addWidget(savePattern);
+
+        auto *previewBar = new QHBoxLayout;
+        layout->addLayout(previewBar);
+        previewBar->addWidget(previewHeading, 1);
+        previewBar->addWidget(editPattern);
+        preview->setObjectName("taskMessagePreview");
+        preview->setReadOnly(true);
+        preview->setPlaceholderText("选择任务后，可在这里预览插入正文的文字。");
+        preview->setFixedHeight(96);
+        layout->addWidget(preview);
+        connect(editPattern, &QPushButton::clicked, this, [this] {
+            const int mode = tabs->currentIndex();
+            patternHeading->setText(mode == 0 ? "本书 · 发布提示模板" : "本书 · 完成提示模板");
+            pattern->setPlainText(patterns[mode]);
+            notice->hide();
+            setEditing(true);
+            pattern->setFocus();
+        });
+        connect(reset, &QPushButton::clicked, this,
+                [this] { pattern->setPlainText(StoryTasks::defaultMessagePattern(tabs->currentIndex() == 1)); });
+        connect(cancel, &QPushButton::clicked, this, [this] {
+            notice->hide();
+            setEditing(false);
+        });
+        connect(savePattern, &QPushButton::clicked, this, [this] {
+            report([&] {
+                const int mode = tabs->currentIndex();
+                StoryTasks::saveMessagePattern(book, mode == 1, pattern->toPlainText());
+                patterns[mode] = pattern->toPlainText();
+                setEditing(false);
+                notice->setText("本书提示模板已保存。");
+            });
+        });
+        connect(pattern, &QPlainTextEdit::textChanged, this, &WriterTasks::refreshPreview);
+        connect(title, &QLineEdit::textChanged, this, &WriterTasks::refreshPreview);
+        connect(conditions, &QPlainTextEdit::textChanged, this, &WriterTasks::refreshPreview);
+        connect(actor, &QComboBox::currentIndexChanged, this, &WriterTasks::refreshPreview);
         connect(pending, &QComboBox::currentIndexChanged, this, [this] { report([&] { showSelection(); }); });
         insert->setObjectName("writerTaskInsert");
         layout->addWidget(insert);
@@ -180,6 +285,7 @@ class WriterTasks : public QWidget
                     refreshPending();
                 else
                 {
+                    refreshPreview();
                     submit->setEnabled(actor->count() > 0);
                     if (!actor->count())
                         notice->setText("本书尚无人物，请先建立承接人的档案。");
@@ -191,15 +297,9 @@ class WriterTasks : public QWidget
         connect(submit, &QPushButton::clicked, this, [this] {
             report([&] {
                 if (tabs->currentIndex() == 0)
-                {
-                    draft.title = title->text();
-                    draft.instructions = conditions->toPlainText();
-                    draft.person = actor->currentData().toInt();
-                    draft.published = chapter;
-                    commit(draft, insert->isChecked());
-                }
+                    commit(draft, insert->isChecked(), rendered);
                 else if (selected.id)
-                    commit(selected, insert->isChecked());
+                    commit(selected, insert->isChecked(), rendered);
             });
         });
     }

@@ -1,4 +1,5 @@
 #include "story_tasks.h"
+#include <QRegularExpression>
 #include <limits>
 
 namespace
@@ -32,7 +33,7 @@ QString StoryTasks::rewardText(const TaskReward &reward)
 {
     const auto &r = reward.resource;
     if (r.kind == "numeric" || r.kind == "supply")
-        return QString("%1 × %2").arg(r.name).arg(reward.quantity);
+        return r.name + " × " + QString::number(reward.quantity);
     if (r.kind != "skill")
         return r.name;
     QStringList attributes;
@@ -43,19 +44,49 @@ QString StoryTasks::rewardText(const TaskReward &reward)
     attributes << (r.uses < 0 ? QStringLiteral("次数不限") : QString("可用 %1 次").arg(r.uses));
     return r.name + "（" + attributes.join("，") + "）";
 }
-QString StoryTasks::manuscriptText(const StoryTask &task, const QString &actor, bool completed)
+QString StoryTasks::defaultMessagePattern(bool completed)
 {
-    QStringList lines{(completed ? QStringLiteral("【系统任务完成】") : QStringLiteral("【系统任务发布】")) +
-                          task.title,
-                      "承接人：" + actor};
-    if (!task.instructions.trimmed().isEmpty())
-        lines << "完成条件：" + task.instructions.trimmed();
+    return (completed ? QStringLiteral("【系统任务完成】") : QStringLiteral("【系统任务发布】")) +
+           "{{任务名}}\n承接人：{{承接人}}\n{{条件行}}" +
+           (completed ? QStringLiteral("已发奖励：") : QStringLiteral("任务奖励：")) + "{{奖励}}";
+}
+QString StoryTasks::messagePattern(Book &book, bool completed)
+{
+    auto value = book.value("SELECT pattern FROM task_message_templates WHERE completed=?", {int(completed)});
+    return value.isNull() ? defaultMessagePattern(completed) : value.toString();
+}
+void StoryTasks::saveMessagePattern(Book &book, bool completed, const QString &pattern)
+{
+    require(!pattern.trimmed().isEmpty(), "请填写提示模板，或使用默认格式。");
+    if (pattern == defaultMessagePattern(completed))
+        book.run("DELETE FROM task_message_templates WHERE completed=?", {int(completed)});
+    else
+        book.run("INSERT INTO task_message_templates(completed,pattern) VALUES(?,?) "
+                 "ON CONFLICT(completed) DO UPDATE SET pattern=excluded.pattern",
+                 {int(completed), pattern});
+}
+QString StoryTasks::manuscriptText(const StoryTask &task, const QString &actor, const QString &pattern)
+{
     QStringList rewards;
     for (const auto &reward : task.rewards)
         rewards << rewardText(reward);
-    lines << (completed ? QStringLiteral("已发奖励：") : QStringLiteral("任务奖励：")) +
-                 (rewards.isEmpty() ? QStringLiteral("无") : rewards.join("、"));
-    return lines.join('\n');
+    const auto condition = task.instructions.trimmed();
+    const QHash<QString, QString> values{{"任务名", task.title.trimmed()},
+                                         {"承接人", actor},
+                                         {"完成条件", condition},
+                                         {"条件行", condition.isEmpty() ? QString() : "完成条件：" + condition + '\n'},
+                                         {"奖励", rewards.isEmpty() ? QStringLiteral("无") : rewards.join("、")}};
+    static const QRegularExpression field(QStringLiteral(R"(\{\{([^{}\r\n]+)\}\})"));
+    QString result;
+    qsizetype end = 0;
+    for (auto match : field.globalMatch(pattern))
+    {
+        result += QStringView(pattern).sliced(end, match.capturedStart() - end);
+        result += values.value(match.captured(1), match.captured());
+        end = match.capturedEnd();
+    }
+    result += QStringView(pattern).sliced(end);
+    return result;
 }
 StoryTask StoryTasks::get(Book &book, int id)
 {

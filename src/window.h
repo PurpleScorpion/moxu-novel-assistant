@@ -651,7 +651,7 @@ class Window : public QMainWindow
     {
         save();
         beginSheet(QString("任务 · 第 %1 章").arg(chapters->currentRow() + 1));
-        auto commit = [this, target = chapter, panel = sheet](const StoryTask &task, bool insert) {
+        auto commit = [this, target = chapter, panel = sheet](const StoryTask &task, bool insert, const QString &preview) {
             if (panel != sheet || chapter != target || pages->currentWidget() != writer)
                 throw std::runtime_error("当前章节已切换，请重新打开任务侧栏。");
             const bool finish = task.id != 0;
@@ -670,10 +670,14 @@ class Window : public QMainWindow
                     throw std::runtime_error("章节正文已变化，本次操作已撤回。请重新载入本章后再试。");
                 const auto saved = StoryTasks::get(*book, id);
                 const auto actor = book->value("SELECT name FROM people WHERE id=?", {saved.person}).toString();
-                snippet = StoryTasks::manuscriptText(saved, actor, finish);
-                if (at > 0 && original.at(at - 1) != '\n')
+                snippet = StoryTasks::manuscriptText(saved, actor, StoryTasks::messagePattern(*book, finish));
+                if (snippet != preview)
+                    throw std::runtime_error("任务资料或模板已变化，请重新打开侧栏并核对预览。");
+                if (snippet.trimmed().isEmpty())
+                    throw std::runtime_error("正文预览为空，请补充任务内容或修改提示模板。");
+                if (at > 0 && original.at(at - 1) != '\n' && !snippet.startsWith('\n'))
                     snippet.prepend('\n');
-                if (at < original.size() && original.at(at) != '\n')
+                if (at < original.size() && original.at(at) != '\n' && !snippet.endsWith('\n'))
                     snippet.append('\n');
                 book->save(target, original.left(at) + snippet + original.mid(at), Book::SaveMode::Checkpoint);
             });
