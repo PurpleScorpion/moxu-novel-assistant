@@ -1,6 +1,6 @@
 # 墨序 小说辅助系统
 
-**[下载最新版 Windows 64 位便携包](https://github.com/PurpleScorpion/moxu-novel-assistant/raw/refs/heads/main/downloads/Moxu-win64.zip)**（当前为 <!-- moxu-version -->0.31.0<!-- /moxu-version -->）。解压整个 ZIP，双击其中的 `Moxu.exe` 即可使用。
+**[下载最新版 Windows 64 位便携包](https://github.com/PurpleScorpion/moxu-novel-assistant/raw/refs/heads/main/downloads/Moxu-win64.zip)**（当前为 <!-- moxu-version -->0.32.0<!-- /moxu-version -->）。解压整个 ZIP，双击其中的 `Moxu.exe` 即可使用。
 
 面向小说作者的本地桌面写作软件。启动后创建或选择书籍，在书内编写和保存章节，通过顶部工具栏插入人物、事件、积分与自定义属性面板，同时管理设定、关系、资源收支和故事时间轴。
 
@@ -10,7 +10,7 @@
 - 项目位置：`D:\work_space\py\moxu-novel-assistant`
 - 技术方案：C++、Qt Widgets、SQLite
 - 首期平台：Windows 11 x64
-- 当前版本：Windows 桌面写作预览版 <!-- moxu-version -->0.31.0<!-- /moxu-version -->
+- 当前版本：Windows 桌面写作预览版 <!-- moxu-version -->0.32.0<!-- /moxu-version -->
 
 首次启动选择小说保存目录，默认使用程序旁的“书籍”文件夹。之后可在书架修改。每本书的 `.moxu` 文件就是一个 SQLite 数据库，保存章节正文、人物、事件账本和历史版本。在书架点书本右上角「⋯ → 打开本地目录」即可找到它。跨书共用的全局 Skill 单独保存在 `%LOCALAPPDATA%\Moxu\Moxu\skills.sqlite`。
 
