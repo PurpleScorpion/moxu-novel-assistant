@@ -530,6 +530,86 @@ int main(int argc, char **argv)
         check(ledger->isVisible() && editor->toPlainText() == currentText &&
                   verify.value("SELECT body FROM chapters WHERE id=2").toString().endsWith("另章记事"),
               "追加正文未写入所选章节");
+        click(window, "进入专注写作");
+        click(sheet(), "收起");
+        chapterList->setCurrentRow(0);
+        const QString original = "上文。下文。";
+        editor->setPlainText(original);
+        auto taskCursor = editor->textCursor();
+        taskCursor.setPosition(1);
+        taskCursor.setPosition(3, QTextCursor::KeepAnchor);
+        editor->setTextCursor(taskCursor);
+        StoryTask future;
+        future.person = 1;
+        future.published = 2;
+        future.title = "后章任务";
+        int futureId = StoryTasks::save(verify, future);
+        action("任务");
+        auto *taskTabs = sheet().findChild<QTabWidget *>();
+        taskTabs->setCurrentIndex(1);
+        check(sheet().findChild<QComboBox *>("writerTaskPending")->findData(futureId) < 0, "当前章节出现未来任务");
+        taskTabs->setCurrentIndex(0);
+        sheet().findChild<QLineEdit *>("writerTaskTitle")->setText("寻回玉简");
+        sheet().findChild<QPlainTextEdit *>("writerTaskConditions")->setPlainText("将玉简带回山门。");
+        auto *taskActor = sheet().findChild<QComboBox *>("writerTaskActor");
+        taskActor->setCurrentIndex(taskActor->findData(1));
+        auto *taskResource = sheet().findChild<QComboBox *>("writerTaskResource");
+        taskResource->setCurrentText("数值资源 · 积分");
+        sheet().findChild<QSpinBox *>("writerTaskQuantity")->setValue(42);
+        click(sheet(), "添加奖励");
+        auto *insertTask = sheet().findChild<QCheckBox *>("writerTaskInsert");
+        check(!insertTask->isChecked(), "发布任务默认插入正文");
+        insertTask->setChecked(true);
+        const auto beforePoints = verify.balance(1, "积分", 2);
+        click(sheet(), "在本章发布任务");
+        const int publishedId =
+            verify.value("SELECT id FROM story_tasks WHERE title='寻回玉简' AND published=1").toInt();
+        const auto publishedTask = StoryTasks::get(verify, publishedId);
+        const auto publishNotice = StoryTasks::manuscriptText(publishedTask, "林澈", false);
+        check(editor->toPlainText() == original.left(3) + "\n" + publishNotice + "\n" + original.mid(3) &&
+                  verify.value("SELECT body FROM chapters WHERE id=1") == editor->toPlainText() &&
+                  publishNotice.contains("将玉简带回山门。") && publishNotice.contains("积分 × 42") &&
+                  verify.balance(1, "积分", 2) == beforePoints,
+              "发布任务未保留选区或提前发奖");
+
+        chapterList->setCurrentRow(1);
+        action("任务");
+        sheet().findChild<QTabWidget *>()->setCurrentIndex(1);
+        auto *choices = sheet().findChild<QComboBox *>("writerTaskPending");
+        choices->setCurrentIndex(choices->findData(publishedId));
+        auto secondBody = editor->toPlainText();
+        insertTask = sheet().findChild<QCheckBox *>("writerTaskInsert");
+        check(!insertTask->isChecked(), "结算默认插入正文");
+        insertTask->setChecked(true);
+        verify.run("CREATE TRIGGER refuse_task_text BEFORE UPDATE OF body ON chapters BEGIN SELECT "
+                   "RAISE(ABORT,'写入失败'); END");
+        click(sheet(), "完成任务并发奖");
+        check(sheet().isVisible() && editor->toPlainText() == secondBody &&
+                  !StoryTasks::get(verify, publishedId).completed && verify.balance(1, "积分", 2) == beforePoints,
+              "正文写入失败未回滚任务和奖励");
+        verify.run("DROP TRIGGER refuse_task_text");
+        click(sheet(), "完成任务并发奖");
+        check(editor->toPlainText().contains("【系统任务完成】寻回玉简") &&
+                  editor->toPlainText().contains("已发奖励：积分 × 42") &&
+                  verify.value("SELECT body FROM chapters WHERE id=2") == editor->toPlainText() &&
+                  verify.balance(1, "积分", 2) == beforePoints + 42 &&
+                  StoryTasks::get(verify, publishedId).completed == 2,
+              "当前章节结算或正文通知错误");
+        auto afterFinish = editor->toPlainText();
+        action("任务");
+        sheet().findChild<QTabWidget *>()->setCurrentIndex(1);
+        choices = sheet().findChild<QComboBox *>("writerTaskPending");
+        check(choices->findData(publishedId) < 0 && choices->findData(futureId) >= 0, "可结算列表未刷新");
+        choices->setCurrentIndex(choices->findData(futureId));
+        click(sheet(), "完成任务并发奖");
+        check(StoryTasks::get(verify, futureId).completed == 2 && editor->toPlainText() == afterFinish,
+              "未勾选插入仍改动了正文");
+        action("任务");
+        sheet().findChild<QLineEdit *>("writerTaskTitle")->setText("无正文通知");
+        click(sheet(), "在本章发布任务");
+        check(verify.value("SELECT count(*) FROM story_tasks WHERE title='无正文通知' AND published=2").toInt() == 1 &&
+                  editor->toPlainText() == afterFinish,
+              "只发布任务失败");
         check(watch.shown.isEmpty(), "专注写作中出现了对话框");
     }
     catch (const std::exception &e)

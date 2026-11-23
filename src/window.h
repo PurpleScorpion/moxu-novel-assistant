@@ -4,6 +4,7 @@
 #include "dossier.h"
 #include "event_form.h"
 #include "writer_sheet.h"
+#include "writer_tasks.h"
 #include "writing_assistant.h"
 #include <QtWidgets>
 #include <cmath>
@@ -646,6 +647,50 @@ class Window : public QMainWindow
         tools->hide();
         directoryMessage->setText("默认目录  " + QDir::toNativeSeparators(defaultBooksPath()));
     }
+    void writerTasks()
+    {
+        save();
+        beginSheet(QString("任务 · 第 %1 章").arg(chapters->currentRow() + 1));
+        auto commit = [this, target = chapter, panel = sheet](const StoryTask &task, bool insert) {
+            if (panel != sheet || chapter != target || pages->currentWidget() != writer)
+                throw std::runtime_error("当前章节已切换，请重新打开任务侧栏。");
+            const bool finish = task.id != 0;
+            QString snippet;
+            const auto original = editor->toPlainText();
+            const int at = insertion.position();
+            book->atomic([&] {
+                int id = task.id;
+                if (finish)
+                    StoryTasks::complete(*book, id, task.revision, target);
+                else
+                    id = StoryTasks::save(*book, task);
+                if (!insert)
+                    return;
+                if (book->value("SELECT body FROM chapters WHERE id=?", {target}).toString() != original)
+                    throw std::runtime_error("章节正文已变化，本次操作已撤回。请重新载入本章后再试。");
+                const auto saved = StoryTasks::get(*book, id);
+                const auto actor = book->value("SELECT name FROM people WHERE id=?", {saved.person}).toString();
+                snippet = StoryTasks::manuscriptText(saved, actor, finish);
+                if (at > 0 && original.at(at - 1) != '\n')
+                    snippet.prepend('\n');
+                if (at < original.size() && original.at(at) != '\n')
+                    snippet.append('\n');
+                book->save(target, original.left(at) + snippet + original.mid(at), Book::SaveMode::Checkpoint);
+            });
+            if (insert)
+            {
+                insertion.clearSelection();
+                insertion.insertText(snippet);
+                dirty = false;
+                status->pending.stop();
+            }
+            closeSheet();
+            statusBar()->clearMessage();
+            status->confirm((finish ? QStringLiteral("任务完成及奖励") : QStringLiteral("任务发布")) +
+                            (insert ? QStringLiteral("和正文") : QString()));
+        };
+        sheet->form->addWidget(writerTaskForm(*book, chapter, commit));
+    }
     void record()
     {
         beginSheet("记录事件 · 第 " + QString::number(chapters->currentRow() + 1) + " 章");
@@ -1225,6 +1270,7 @@ class Window : public QMainWindow
         tool("属性面板", [this] { panel(); });
         tool("检查本章", [this] { aiWriting(true); }, false);
         tool("伏笔", [this] { markClue(); });
+        tool("任务", [this] { writerTasks(); });
         tool("记录事件", [this] { record(); });
         tools->addSeparator();
         tool("剧情大事", [this] {

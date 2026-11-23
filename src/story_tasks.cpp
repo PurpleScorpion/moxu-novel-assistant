@@ -1,4 +1,5 @@
 #include "story_tasks.h"
+#include <limits>
 
 namespace
 {
@@ -13,6 +14,49 @@ void requireOpen(const StoryTask &task, int revision)
     require(task.revision == revision, "任务已修改，请返回列表重新打开。");
 }
 } // namespace
+void StoryTasks::addReward(QList<TaskReward> &rewards, const CatalogEntry &resource, int quantity)
+{
+    require(quantity > 0, "奖励数量必须大于零。");
+    for (auto &reward : rewards)
+    {
+        if (reward.resource.kind != resource.kind || reward.resource.name != resource.name)
+            continue;
+        require(resource.kind == "numeric" || resource.kind == "supply", "这项奖励已在列表中。");
+        require(reward.quantity <= std::numeric_limits<int>::max() - quantity, "奖励数量过大。");
+        reward.quantity += quantity;
+        return;
+    }
+    rewards.append({resource, quantity});
+}
+QString StoryTasks::rewardText(const TaskReward &reward)
+{
+    const auto &r = reward.resource;
+    if (r.kind == "numeric" || r.kind == "supply")
+        return QString("%1 × %2").arg(r.name).arg(reward.quantity);
+    if (r.kind != "skill")
+        return r.name;
+    QStringList attributes;
+    if (!r.level.isEmpty())
+        attributes << r.level;
+    if (!r.cooldown.isEmpty())
+        attributes << "冷却 " + r.cooldown;
+    attributes << (r.uses < 0 ? QStringLiteral("次数不限") : QString("可用 %1 次").arg(r.uses));
+    return r.name + "（" + attributes.join("，") + "）";
+}
+QString StoryTasks::manuscriptText(const StoryTask &task, const QString &actor, bool completed)
+{
+    QStringList lines{(completed ? QStringLiteral("【系统任务完成】") : QStringLiteral("【系统任务发布】")) +
+                          task.title,
+                      "承接人：" + actor};
+    if (!task.instructions.trimmed().isEmpty())
+        lines << "完成条件：" + task.instructions.trimmed();
+    QStringList rewards;
+    for (const auto &reward : task.rewards)
+        rewards << rewardText(reward);
+    lines << (completed ? QStringLiteral("已发奖励：") : QStringLiteral("任务奖励：")) +
+                 (rewards.isEmpty() ? QStringLiteral("无") : rewards.join("、"));
+    return lines.join('\n');
+}
 StoryTask StoryTasks::get(Book &book, int id)
 {
     auto q =

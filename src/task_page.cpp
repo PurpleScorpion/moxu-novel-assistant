@@ -146,18 +146,7 @@ TaskPage::TaskPage()
     connect(addReward, &QPushButton::clicked, this, [this] {
         invoke([&] {
             const auto r = catalog.at(resource->currentIndex());
-            for (auto &reward : task.rewards)
-                if (reward.resource.kind == r.kind && reward.resource.name == r.name)
-                {
-                    if (r.kind == "item" || r.kind == "skill")
-                        throw std::runtime_error("这项奖励已在列表中。");
-                    if (reward.quantity > std::numeric_limits<int>::max() - quantity->value())
-                        throw std::runtime_error("奖励数量过大。");
-                    reward.quantity += quantity->value();
-                    showRewards();
-                    return;
-                }
-            task.rewards.append({r, quantity->value()});
+            StoryTasks::addReward(task.rewards,r,quantity->value());
             showRewards();
         });
     });

@@ -16,6 +16,9 @@ struct StoryTask
 
 namespace StoryTasks
 {
+void addReward(QList<TaskReward> &rewards, const CatalogEntry &resource, int quantity);
+QString rewardText(const TaskReward &reward);
+QString manuscriptText(const StoryTask &task, const QString &actor, bool completed);
 StoryTask get(Book &book, int id);
 int save(Book &book, const StoryTask &task);
 void complete(Book &book, int id, int revision, int chapter);
