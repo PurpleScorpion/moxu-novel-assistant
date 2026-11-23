@@ -42,6 +42,7 @@ int main(int argc, char **argv)
     applyTheme(app);
     app.setOrganizationName("MoxuTests");
     app.setApplicationName("Focus");
+    app.setApplicationVersion("1.2.3");
     QTemporaryDir dir;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.path());
@@ -58,11 +59,14 @@ int main(int argc, char **argv)
         QSettings().setValue("booksDir", dir.path());
         Window window;
         window.show();
+        check(window.windowTitle() == "墨序 v1.2.3 · 小说辅助系统", "书架标题未显示运行版本");
         auto *recent = visible<QListWidget>(window).value(0);
         check(recent, "缺少书架");
         recent->setCurrentRow(0);
         QTest::keyClick(recent, Qt::Key_Return);
+        check(window.windowTitle() == "墨序 v1.2.3 · 甲", "资料页标题缺少版本或书名");
         click(window, "进入专注写作");
+        check(window.windowTitle() == "墨序 v1.2.3 · 甲", "专注写作标题缺少版本或书名");
         DialogWatch watch;
         app.installEventFilter(&watch);
         auto *editor = window.findChild<QPlainTextEdit *>("manuscript");

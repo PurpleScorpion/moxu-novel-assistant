@@ -319,6 +319,10 @@ class Window : public QMainWindow
             status->setText("章节名已保存");
         });
     }
+    void updateWindowTitle(const QString &context)
+    {
+        setWindowTitle("墨序 v" + QCoreApplication::applicationVersion() + " · " + context);
+    }
     void showShelf()
     {
         save();
@@ -335,7 +339,7 @@ class Window : public QMainWindow
         tools->hide();
         statusBar()->hide();
         status->clear();
-        setWindowTitle("墨序 · 小说辅助系统");
+        updateWindowTitle("小说辅助系统");
         location->setText(QDir::toNativeSeparators(QSettings().value("booksDir", defaultBooksPath()).toString()));
         refreshCovers();
     }
@@ -540,7 +544,6 @@ class Window : public QMainWindow
         if (!candidate->tryLock())
             throw std::runtime_error("无法锁定书籍，请检查是否已打开以及目录写入权限。");
         auto next = std::make_unique<Book>(path, title);
-        auto name = next->value("SELECT title FROM meta").toString();
         auto q = next->run("SELECT id,title FROM chapters ORDER BY position");
         QSignalBlocker block(chapters);
         chapters->clear();
@@ -553,7 +556,6 @@ class Window : public QMainWindow
         lock = std::move(candidate);
         chapters->setCurrentRow(0);
         loadChapter(chapters->item(0)->data(Qt::UserRole).toInt());
-        setWindowTitle(name + " · 墨序");
         enterDossier();
         QSettings settings;
         auto paths = settings.value("recent").toStringList();
@@ -636,7 +638,7 @@ class Window : public QMainWindow
         if (pages->currentWidget() == writer)
             writerFocus = writer->focusWidget();
         dossier->enter(book.get(), page, chapter);
-        setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+        updateWindowTitle(book->value("SELECT title FROM meta").toString());
         pages->setCurrentWidget(dossier);
         tools->hide();
         statusBar()->hide();
@@ -1403,7 +1405,7 @@ class Window : public QMainWindow
             while (added.next()) addChapterItem(added.value(0).toInt(), added.value(1).toString());
             chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow()+1).arg(chapters->count()));
             refreshChapterMoves();
-            setWindowTitle(book->value("SELECT title FROM meta").toString() + " · 墨序");
+            updateWindowTitle(book->value("SELECT title FROM meta").toString());
             if (sheet)
             {
                 if (auto *view = sheet->findChild<QGraphicsView *>("writerRelationGraph"))
@@ -1421,7 +1423,7 @@ class Window : public QMainWindow
         };
         dossier = new Dossier(
             sessionKeys, focusWriter, [this] { showShelf(); }, [this] { graph(); },
-            [this](QString n) { setWindowTitle(n + " · 墨序"); },
+            [this](QString n) { updateWindowTitle(n); },
             [this](int target, const QString &addition) {
                 if (target != chapter)
                     return;

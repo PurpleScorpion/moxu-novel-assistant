@@ -10,12 +10,15 @@ int main(int argc, char **argv)
         app.installTranslator(&chinese);
     applyTheme(app);
     app.setApplicationName("Moxu");
+    app.setApplicationVersion(QStringLiteral(MOXU_VERSION));
     app.setWindowIcon(QIcon(":/assets/moxu.png"));
     app.setOrganizationName("Moxu");
     Window window;
     window.show();
     if (app.arguments().contains("--startup-check"))
     {
+        if (!window.windowTitle().startsWith("墨序 v" + app.applicationVersion() + " · "))
+            return 9;
         if (window.windowIcon().pixmap(32).isNull())
             return 8;
         if (!QSslSocket::supportsSsl())
