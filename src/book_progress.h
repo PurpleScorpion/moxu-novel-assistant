@@ -30,8 +30,10 @@ class BookProgress : public QFrame
             QFrame#bookProgress { background:#10231a; border:1px solid #355140; border-radius:8px; }
             QLabel { background:transparent; color:#b4cbbd; }
             QLabel[metric="true"] { color:#e0eee5; font-size:19px; font-weight:600; }
-            QLabel[metric="true"][total="true"] { color:#abefbc; }
             QLabel[header="true"] { font-weight:600; }
+            QLabel[progressColumn="已发布"] { color:#77e6a0; }
+            QLabel[progressColumn="待发布"] { color:#ffb568; }
+            QLabel[progressColumn="未发布"] { color:#ff8585; }
             QFrame#progressRule { background:#304a3a; border:none; }
         )");
         auto *grid = new QGridLayout(this);
@@ -49,6 +51,7 @@ class BookProgress : public QFrame
         {
             auto *header = new QLabel(columns[i]);
             header->setProperty("header", true);
+            header->setProperty("progressColumn", columns[i]);
             header->setAlignment(Qt::AlignCenter);
             grid->addWidget(header, 0, i + 1);
             grid->setColumnStretch(i + 1, 1);
@@ -58,7 +61,7 @@ class BookProgress : public QFrame
                 label->setAccessibleName(columns[i] + (row == 2 ? "章节数" : "字数"));
                 label->setAlignment(Qt::AlignCenter);
                 label->setProperty("metric", true);
-                label->setProperty("total", i == 0);
+                label->setProperty("progressColumn", columns[i]);
                 grid->addWidget(label, row, i + 1);
                 return label;
             };
