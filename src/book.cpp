@@ -1,4 +1,5 @@
 #include "book.h"
+#include "chapter_text.h"
 
 namespace
 {
@@ -44,6 +45,23 @@ QVariant Book::value(const QString &sql, const QVariantList &args) const
 {
     auto q = run(sql, args);
     return q.next() ? q.value(0) : QVariant();
+}
+void Book::refreshWordCounts()
+{
+    atomic([&] {
+        QList<QPair<int, qsizetype>> counts;
+        QSqlQuery missing(db);
+        missing.setForwardOnly(true);
+        if (!missing.exec("SELECT id,body FROM chapters WHERE word_count IS NULL"))
+            fail(missing.lastError().text());
+        while (missing.next())
+            counts.append({missing.value(0).toInt(), chapterWordCount(missing.value(1).toString())});
+        if (missing.lastError().isValid())
+            fail(missing.lastError().text());
+        missing.finish();
+        for (const auto &[id, count] : counts)
+            run("UPDATE chapters SET word_count=? WHERE id=?", {count, id});
+    });
 }
 void Book::atomic(const std::function<void()> &operation)
 {
@@ -141,6 +159,9 @@ Book::Book(const QString &path, const QString &newTitle)
                     "substr(body,instr(body,char(10))) WHERE chapter=NEW.id AND substr(body,1,instr(body,char(10))-1)"
                     "='【第 '||OLD.position||' 章 · '||OLD.title||'】'; END");
             });
+        if (!value("SELECT 1 FROM pragma_table_info('chapters') WHERE name='publication_status'").isValid())
+            run("ALTER TABLE chapters ADD COLUMN publication_status TEXT NOT NULL DEFAULT '未发布' "
+                "CHECK(publication_status IN ('未发布','待发布','已发布'))");
         if (!value("SELECT 1 FROM pragma_table_info('writing_notes') WHERE name='position'").isValid())
             atomic([&] {
                 run("ALTER TABLE writing_notes ADD COLUMN position INTEGER");

@@ -328,7 +328,7 @@ int main(int argc, char **argv)
                   verify.value("SELECT body FROM chapters WHERE id=2").toString() == "林澈",
               "改名未保留原章节");
         auto *chapterList = visible<QListWidget>(window).first();
-        check(chapterList->item(1)->text() == "第 2 章 · 重逢", "目录没有显示序号及新章名");
+        check(chapterList->item(1)->text() == "第 2 章 · 重逢\n未发布", "目录没有显示序号、新章名及发布状态");
         auto titleStart = [&] {
             QApplication::processEvents();
             const auto bounds = chapterList->visualItemRect(chapterList->item(1));

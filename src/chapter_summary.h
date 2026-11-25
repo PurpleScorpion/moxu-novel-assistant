@@ -21,14 +21,7 @@ class ChapterSummary : public QWidget
     }
     void refreshList()
     {
-        book.atomic([&] {
-            QList<QPair<int, qsizetype>> counts;
-            auto missing = book.run("SELECT id,body FROM chapters WHERE word_count IS NULL");
-            while (missing.next())
-                counts.append({missing.value(0).toInt(), chapterWordCount(missing.value(1).toString())});
-            for (auto [id, count] : counts)
-                book.run("UPDATE chapters SET word_count=? WHERE id=?", {count, id});
-        });
+        book.refreshWordCounts();
         auto q = book.run("SELECT c.id,c.word_count,c.body_version,s.chapter,s.source_version "
                           "FROM chapters c LEFT JOIN chapter_summaries s ON s.chapter=c.id");
         while (q.next())

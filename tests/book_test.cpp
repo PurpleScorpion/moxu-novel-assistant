@@ -252,12 +252,15 @@ int main(int argc, char **argv)
                        "('outline','全书大纲','',NULL)");
             for (auto sql : {"DROP TRIGGER chapter_appended", "DROP TRIGGER chapter_edited", "DROP TRIGGER summary_heading",
                              "DROP INDEX chapter_position", "DROP VIEW ordered_events", "DROP VIEW ordered_stock",
+                             "ALTER TABLE chapters DROP COLUMN publication_status",
                              "ALTER TABLE chapters DROP COLUMN position", "ALTER TABLE chapters DROP COLUMN body_version",
                              "ALTER TABLE chapters DROP COLUMN word_count", "ALTER TABLE chapter_summaries DROP COLUMN source_version",
                              "DROP TRIGGER outline_appended", "ALTER TABLE writing_notes DROP COLUMN position"})
                 legacy.run(sql);
         }
         Book upgraded(oldFile);
+        if (upgraded.value("SELECT count(*) FROM chapters WHERE publication_status='未发布'").toInt() != 2)
+            return 44;
         if (upgraded.value("SELECT id FROM chapters WHERE position=2") != 9 ||
             upgraded.value("SELECT body FROM chapter_summaries WHERE chapter=9") != "手改的旧摘要" ||
             !upgraded.value("SELECT source_version FROM chapter_summaries WHERE chapter=9").isNull() ||

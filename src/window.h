@@ -30,6 +30,7 @@ class Window : public QMainWindow
     QLabel *heading = new QLabel;
     QLabel *chapterPosition = new QLabel;
     QLabel *chapterLength = new QLabel("本章 0 字");
+    DownwardCombo *publication = new DownwardCombo;
     SaveStatus *status = new SaveStatus;
     QHBoxLayout *writerColumns;
     WriterSheet *sheet = nullptr;
@@ -283,22 +284,25 @@ class Window : public QMainWindow
         chapter = id;
         QSignalBlocker noEdit(editor);
         heading->setText(q.value(0).toString());
+        QSignalBlocker keepStatus(publication);
+        publication->setCurrentText(chapters->currentItem()->data(Qt::UserRole + 1).toString());
         refreshChapterMoves();
         chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow() + 1).arg(chapters->count()));
         editor->setPlainText(q.value(1).toString());
         dirty = false;
         status->setText("已保存");
     }
-    void addChapterItem(int id, const QString &name, int index = -1)
+    void addChapterItem(int id, const QString &name, const QString &state, int index = -1)
     {
         auto *item = new QListWidgetItem;
         chapters->insertItem(index < 0 ? chapters->count() : index, item);
-        setChapterLabel(item, name);
         item->setData(Qt::UserRole, id);
+        item->setData(Qt::UserRole + 1, state);
+        setChapterLabel(item, name);
     }
     void setChapterLabel(QListWidgetItem *item, const QString &name)
     {
-        item->setText(numberedChapter(chapters->row(item) + 1, name));
+        item->setText(numberedChapter(chapters->row(item) + 1, name) + '\n' + item->data(Qt::UserRole + 1).toString());
         item->setToolTip(name);
     }
     void renameChapter()
@@ -544,11 +548,11 @@ class Window : public QMainWindow
         if (!candidate->tryLock())
             throw std::runtime_error("无法锁定书籍，请检查是否已打开以及目录写入权限。");
         auto next = std::make_unique<Book>(path, title);
-        auto q = next->run("SELECT id,title FROM chapters ORDER BY position");
+        auto q = next->run("SELECT id,title,publication_status FROM chapters ORDER BY position");
         QSignalBlocker block(chapters);
         chapters->clear();
         while (q.next())
-            addChapterItem(q.value(0).toInt(), q.value(1).toString());
+            addChapterItem(q.value(0).toInt(), q.value(1).toString(), q.value(2).toString());
         if (!chapters->count())
             throw std::runtime_error("书籍没有章节");
         bookPath = QFileInfo(path).absoluteFilePath();
@@ -1278,7 +1282,7 @@ class Window : public QMainWindow
                 const int where = position->currentIndex();
                 const int row = where ? chapters->currentRow() + int(where == 2) : chapters->count();
                 const int id = book->insertChapter(title, where ? chapter : 0, where == 2);
-                addChapterItem(id, title, row);
+                addChapterItem(id, title, "未发布", row);
                 for (int i = row + 1; i < chapters->count(); ++i)
                     setChapterLabel(chapters->item(i), chapters->item(i)->toolTip());
                 chapters->setCurrentRow(row);
@@ -1318,6 +1322,31 @@ class Window : public QMainWindow
         chapterLength->setToolTip("每个汉字、字母和数字各计一字，空白、标点和符号不计。");
         chapterMeta->addSpacing(10);
         chapterMeta->addWidget(chapterLength);
+        publication->setObjectName("chapterPublicationStatus");
+        publication->setAccessibleName("章节发布状态");
+        publication->setToolTip("标记本章发布状态，选择后自动保存到本书。");
+        publication->addItems({"未发布", "待发布", "已发布"});
+        chapterMeta->addWidget(publication);
+        connect(publication, &QComboBox::currentTextChanged, this, [this](const QString &state) {
+            auto *item = chapters->currentItem();
+            if (!book || !item || item->data(Qt::UserRole).toInt() != chapter)
+                return;
+            if (guard([&] {
+                    if (book->run("UPDATE chapters SET publication_status=? WHERE id=?", {state, chapter})
+                            .numRowsAffected() != 1)
+                        throw std::runtime_error("章节不存在，无法保存发布状态。");
+                }))
+            {
+                item->setData(Qt::UserRole + 1, state);
+                setChapterLabel(item, item->toolTip());
+                statusBar()->showMessage("本章已标记为「" + state + "」", 2500);
+            }
+            else
+            {
+                QSignalBlocker restore(publication);
+                publication->setCurrentText(item->data(Qt::UserRole + 1).toString());
+            }
+        });
         chapterMeta->addStretch();
         connect(editor->document(), &QTextDocument::contentsChanged, this, [this] {
             chapterLength->setText(QString("本章 %1 字").arg(chapterWordCount(editor->toPlainText())));
@@ -1401,8 +1430,8 @@ class Window : public QMainWindow
         });
         auto focusWriter = [this] {
             // Chapters created in the studio may have been appended since the editor was opened.
-            auto added = book->run("SELECT id,title FROM chapters ORDER BY position LIMIT -1 OFFSET ?", {chapters->count()});
-            while (added.next()) addChapterItem(added.value(0).toInt(), added.value(1).toString());
+            auto added = book->run("SELECT id,title,publication_status FROM chapters ORDER BY position LIMIT -1 OFFSET ?", {chapters->count()});
+            while (added.next()) addChapterItem(added.value(0).toInt(), added.value(1).toString(), added.value(2).toString());
             chapterPosition->setText(QString("第 %1 章 / 共 %2 章").arg(chapters->currentRow()+1).arg(chapters->count()));
             refreshChapterMoves();
             updateWindowTitle(book->value("SELECT title FROM meta").toString());

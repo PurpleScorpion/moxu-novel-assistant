@@ -452,7 +452,7 @@ int main(int argc, char **argv)
                 "删除后属性面板仍有失效模板或丢失内置预设");
 
         tool("伏笔");
-        auto *clueChoice = shown<QComboBox>(w, QString());
+        auto *clueChoice = shown<QComboBox>(*shown<QWidget>(w, "writerSheet"), QString());
         clueChoice->setCurrentIndex(clueChoice->findData(clue));
         click(w, "管理本书伏笔");
         auto *clueList = shown<QListWidget>(w, "clueEntryList");
