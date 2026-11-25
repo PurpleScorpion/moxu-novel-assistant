@@ -1,6 +1,7 @@
 #pragma once
 #include "downward_combo.h"
 #include "book.h"
+#include "book_progress.h"
 #include "character_snapshot.h"
 #include "attribute_templates.h"
 #include "resource_catalog.h"
@@ -50,8 +51,8 @@ class Dossier : public QWidget
     QLineEdit *genre = new QLineEdit;
     QString savedTitle, savedSynopsis, savedGenre, bookFile;
     SaveStatus *notice = new SaveStatus;
-    QLabel *counts = new QLabel;
-    QLabel *publicationCounts = new QLabel;
+    BookProgress *progress = new BookProgress;
+    QLabel *bookDetails = new QLabel;
     HistorySettings *historySettings = new HistorySettings;
     std::function<void(QString)> renameBook;
     bool loading = false;
@@ -83,7 +84,7 @@ class Dossier : public QWidget
         layout->addWidget(b);
         return b;
     }
-    QVBoxLayout *section(QString text, bool framed = true)
+    QVBoxLayout *section(QString text, bool framed = true, QLabel *aside = nullptr)
     {
         auto *page = new QWidget;
         details->addWidget(page);
@@ -92,7 +93,11 @@ class Dossier : public QWidget
         layout->setSpacing(12);
         auto *header = new QLabel(text);
         header->setObjectName("title");
-        layout->addWidget(header);
+        auto *heading = new QHBoxLayout;
+        heading->addWidget(header, 1);
+        if (aside)
+            heading->addWidget(aside);
+        layout->addLayout(heading);
         return framed ? panelColumn(layout, 1) : layout;
     }
     void safe(std::function<void()> action)
@@ -211,19 +216,10 @@ class Dossier : public QWidget
             savedSynopsis = info.value(1).toString();
             genre->setText(savedGenre);
             synopsis->setPlainText(savedSynopsis);
-            book->refreshWordCounts();
-            auto progress = book->run("SELECT count(*),coalesce(sum(word_count),0),"
-                                      "count(*) FILTER (WHERE publication_status='已发布'),"
-                                      "count(*) FILTER (WHERE publication_status='待发布'),"
-                                      "count(*) FILTER (WHERE publication_status='未发布') FROM chapters");
-            progress.next();
-            counts->setText(QString("共 %1 章   ·   %2 字   ·   %3 位人物   ·   %4 条事件")
-                                .arg(progress.value(0).toLongLong()).arg(progress.value(1).toLongLong())
-                                .arg(book->value("SELECT count(*) FROM people").toInt())
-                                .arg(book->value("SELECT count(*) FROM journal").toInt()));
-            publicationCounts->setText(QString("已发布 %1 章     待发布 %2 章     未发布 %3 章")
-                                           .arg(progress.value(2).toLongLong()).arg(progress.value(3).toLongLong())
-                                           .arg(progress.value(4).toLongLong()));
+            progress->load(*book);
+            bookDetails->setText(QString("%1 位人物   ·   %2 条事件")
+                                     .arg(book->value("SELECT count(*) FROM people").toLongLong())
+                                     .arg(book->value("SELECT count(*) FROM journal").toLongLong()));
         }
         else if (page == 1)
         {
@@ -394,12 +390,10 @@ class Dossier : public QWidget
         root->addLayout(right, 1);
         right->addWidget(details, 1);
         right->addWidget(notice);
-        auto *overview = section("书籍概览");
-        counts->setObjectName("sectionTitle");
-        counts->setWordWrap(true);
-        overview->addWidget(counts);
-        publicationCounts->setObjectName("publicationCounts");
-        overview->addWidget(publicationCounts);
+        bookDetails->setObjectName("hint");
+        auto *overviewPage = section("书籍概览", false, bookDetails);
+        overviewPage->addWidget(progress);
+        auto *overview = panelColumn(overviewPage, 1);
         auto *metadata = new QGridLayout;
         overview->addLayout(metadata);
         metadata->addWidget(new QLabel("书名"), 0, 0);

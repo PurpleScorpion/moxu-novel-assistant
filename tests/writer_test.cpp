@@ -264,11 +264,34 @@ int main(int argc, char **argv)
     for (auto *action : window.findChildren<QAction *>())
         if (action->text() == "返回资料工作区") action->trigger();
     selectDossierPage(nav, Dossier::overviewIndex);
-    if (visibleControl<QLabel>(window, "publicationCounts")->text().simplified() != "已发布 1 章 待发布 1 章 未发布 1 章")
-        return 59;
-    const auto labels = window.findChildren<QLabel *>("sectionTitle");
-    if (std::none_of(labels.cbegin(), labels.cend(), [](QLabel *label) {
-            return label->isVisible() && label->text().simplified().startsWith("共 3 章 · 8 字 ·");
-        })) return 60;
+    auto matchesProgress = [&](const QStringList &counts, const QStringList &words) {
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto suffix = QString::number(i);
+            if (visibleControl<QLabel>(window, "progressChapters" + suffix)->text() != counts[i] + " 章" ||
+                visibleControl<QLabel>(window, "progressWords" + suffix)->text() != words[i])
+                return false;
+        }
+        return true;
+    };
+    if (!matchesProgress({"3","1","1","1"}, {"8","3","4","1"})) return 59;
+    selectDossierPage(nav, Dossier::personIndex);
+    verify.atomic([&] {
+        const QString body(1200, QChar(u'文'));
+        verify.run("UPDATE chapters SET body=?", {body});
+        for (int i = 0; i < 97; ++i)
+            verify.run("INSERT INTO chapters(title,body,publication_status) VALUES(?,?,?)",
+                       {QString::number(i + 4), body, i < 9 ? "已发布" : i < 13 ? "待发布" : "未发布"});
+        verify.run("UPDATE chapters SET body=body||'末' WHERE position=1");
+    });
+    selectDossierPage(nav, Dossier::overviewIndex);
+    if (!matchesProgress({"100","10","5","85"}, {"12万","1.2万","6000","10.2万"}) ||
+        visibleControl<QLabel>(window,"progressWords0")->toolTip() != "120001 字") return 60;
+    if (argc == 3 && QString::fromLocal8Bit(argv[1]) == "--overview-preview" &&
+        !window.grab().save(QString::fromLocal8Bit(argv[2]))) return 61;
+    selectDossierPage(nav, Dossier::personIndex);
+    verify.run("UPDATE chapters SET publication_status='已发布'");
+    selectDossierPage(nav, Dossier::overviewIndex);
+    if (!matchesProgress({"100","100","0","0"}, {"12万","12万","0","0"})) return 62;
     return dialogs.shown.isEmpty() ? 0 : 22;
 }
