@@ -1228,12 +1228,28 @@ class Window : public QMainWindow
         setup->addStretch();
         auto *work = writer;
         pages->addWidget(work);
-        writerColumns = new QHBoxLayout(work);
+        auto *writerLayout = new QHBoxLayout(work);
+        writerLayout->setContentsMargins(16, 12, 16, 8);
+        auto *splitter = new QSplitter(Qt::Horizontal);
+        splitter->setObjectName("chapterDirectorySplitter");
+        splitter->setChildrenCollapsible(false);
+        splitter->setHandleWidth(12);
+        splitter->setStyleSheet(
+            "QSplitter#chapterDirectorySplitter::handle:horizontal {background:#345140; margin:6px 5px;}"
+            "QSplitter#chapterDirectorySplitter::handle:horizontal:hover {background:#a4f2aa;}");
+        writerLayout->addWidget(splitter);
+        auto *directory = new QFrame;
+        splitter->addWidget(directory);
+        auto *left = panelColumn(directory, true);
+        auto *writingArea = new QWidget;
+        splitter->addWidget(writingArea);
+        splitter->setStretchFactor(0, 0);
+        splitter->setStretchFactor(1, 1);
+        splitter->handle(1)->setToolTip("左右拖动，调整章节目录宽度");
+        writerColumns = new QHBoxLayout(writingArea);
         auto *cols = writerColumns;
-        cols->setContentsMargins(16, 12, 16, 8);
+        cols->setContentsMargins(0, 0, 0, 0);
         cols->setSpacing(12);
-        auto *left = panelColumn(cols, 0, true);
-        left->parentWidget()->setFixedWidth(178);
         chapters->setObjectName("chapterList");
         auto *directoryHeader = new QHBoxLayout;
         left->addLayout(directoryHeader);
@@ -1295,10 +1311,21 @@ class Window : public QMainWindow
         right->addLayout(chapterHeader);
         auto *expand = new QPushButton("展开目录");
         chapterHeader->addWidget(expand);
-        auto *directory = left->parentWidget();
-        auto setCollapsed = [directory, expand](bool collapsed) {
+        auto restoreDirectoryWidth = [splitter, directory] {
+            if (directory->isHidden() || !splitter->isVisible()) return;
+            const int available = splitter->width() - splitter->handleWidth();
+            if (available <= 0) return;
+            const int preferred = QSettings().value("writing/chapterDirectoryWidth", 230).toInt();
+            const int width = qBound(0, preferred, available);
+            splitter->setSizes({width, available - width});
+        };
+        connect(splitter, &QSplitter::splitterMoved, this, [splitter] {
+            QSettings().setValue("writing/chapterDirectoryWidth", splitter->sizes().first());
+        });
+        auto setCollapsed = [directory, expand, restoreDirectoryWidth](bool collapsed) {
             directory->setVisible(!collapsed);
             expand->setVisible(collapsed);
+            if (!collapsed) restoreDirectoryWidth();
         };
         setCollapsed(QSettings().value("writing/chapterDirectoryCollapsed", false).toBool());
         connect(collapse, &QPushButton::clicked, this, [this, setCollapsed] {
@@ -1428,7 +1455,7 @@ class Window : public QMainWindow
                     saveNow();
             });
         });
-        auto focusWriter = [this] {
+        auto focusWriter = [this, restoreDirectoryWidth] {
             // Chapters created in the studio may have been appended since the editor was opened.
             auto added = book->run("SELECT id,title,publication_status FROM chapters ORDER BY position LIMIT -1 OFFSET ?", {chapters->count()});
             while (added.next()) addChapterItem(added.value(0).toInt(), added.value(1).toString(), added.value(2).toString());
@@ -1445,6 +1472,7 @@ class Window : public QMainWindow
             pages->setCurrentWidget(writer);
             tools->show();
             statusBar()->show();
+            restoreDirectoryWidth();
             if (writerFocus && writerFocus->isVisible() && writerFocus->isEnabled())
                 writerFocus->setFocus();
             else

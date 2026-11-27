@@ -109,15 +109,20 @@ inline void applyTheme(QApplication &app)
     )");
 }
 
-inline QVBoxLayout *panelColumn(QBoxLayout *parent, int stretch, bool rail = false)
+inline QVBoxLayout *panelColumn(QFrame *panel, bool rail)
 {
-    auto *panel = new QFrame;
     panel->setObjectName(rail ? "rail" : "contentPanel");
     auto *column = new QVBoxLayout(panel);
     column->setContentsMargins(16, 16, 16, 16);
     column->setSpacing(10);
-    parent->addWidget(panel, stretch);
     return column;
+}
+
+inline QVBoxLayout *panelColumn(QBoxLayout *parent, int stretch, bool rail = false)
+{
+    auto *panel = new QFrame;
+    parent->addWidget(panel, stretch);
+    return panelColumn(panel, rail);
 }
 
 inline QLabel *sectionLabel(const QString &text)

@@ -57,6 +57,7 @@ int main(int argc, char **argv)
         }
         QSettings().setValue("recent", QStringList{path});
         QSettings().setValue("booksDir", dir.path());
+        QSettings().setValue("writing/chapterDirectoryWidth", 240);
         Window window;
         window.show();
         check(window.windowTitle() == "墨序 v1.2.3 · 小说辅助系统", "书架标题未显示运行版本");
@@ -70,6 +71,20 @@ int main(int argc, char **argv)
         DialogWatch watch;
         app.installEventFilter(&watch);
         auto *editor = window.findChild<QPlainTextEdit *>("manuscript");
+        QApplication::processEvents();
+        auto *splitter = window.findChild<QSplitter *>("chapterDirectorySplitter");
+        check(splitter && splitter->sizes().first() == 240, "进入专注写作没有恢复保存的目录宽度");
+        auto *handle = splitter->handle(1);
+        const auto grip = handle->rect().center();
+        const int initialEditorWidth = editor->width();
+        QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, grip);
+        QTest::mouseMove(handle, grip + QPoint(72, 0));
+        QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, handle->rect().center());
+        QApplication::processEvents();
+        const int draggedWidth = splitter->sizes().first();
+        check(draggedWidth >= 300 && editor->width() < initialEditorWidth &&
+                  QSettings().value("writing/chapterDirectoryWidth").toInt() == draggedWidth,
+              "拖动分隔线未调整或保存章节目录宽度");
         auto action = [&](QString title) {
             for (auto *a : window.findChildren<QAction *>())
                 if (a->text() == title)
@@ -126,6 +141,8 @@ int main(int argc, char **argv)
                   desc->isVisible() && desc->text() == "完成任务",
               "收起目录时未扩宽正文或丢失了事件草稿");
         click(window, "展开目录");
+        QApplication::processEvents();
+        check(splitter->sizes().first() == draggedWidth, "展开目录后没有恢复拖动宽度");
         check(desc->isVisible() && desc->text() == "完成任务", "展开章节目录关闭了事件侧栏");
         click(sheet(), "新建资源");
         check(!desc->isVisible() && editor->isVisible(), "新建资源未保留正文工作区");
